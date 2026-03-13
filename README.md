@@ -65,7 +65,7 @@ Tiingo was selected for V1 because it provides:
 ## Tiingo Setup
 
 1. Create a Tiingo account and API token.
-2. Set `MARKET_DATA_API_KEY` in `.env.local`.
+2. Set up weekly yfinance sync (see scripts) to populate Supabase prices.
 
 ## Symbol Universe Sync
 

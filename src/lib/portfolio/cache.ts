@@ -1,10 +1,6 @@
-import { addYears, isWithinInterval, parseISO } from "date-fns";
+import { isWithinInterval, parseISO } from "date-fns";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { fetchHistoricalAdjustedClose } from "@/lib/api/marketData";
 import { PricePoint } from "@/types";
-import { getExpectedLatestCloseDate, nextDate, shiftDate } from "@/lib/portfolio/market-calendar";
-
-const inFlightBackfills = new Map<string, Promise<void>>();
 
 interface SymbolMarket {
   symbol: string;
@@ -83,94 +79,8 @@ async function getLatestCachedDateByMarket(symbol: string, market: string, endDa
   return data?.date ?? null;
 }
 
-async function backfillSymbolIncremental(symbol: string, market: string, startDate: string, endDate: string) {
-  const lockKey = `${symbol}|${market}|${startDate}|${endDate}`;
-  const inFlight = inFlightBackfills.get(lockKey);
-
-  if (inFlight) {
-    console.info(`[prices] symbol=${symbol} market=${market} waiting_for_inflight_backfill=true`);
-    await inFlight;
-    return;
-  }
-
-  const task = (async () => {
-    const fetched = await fetchHistoricalAdjustedClose(symbol, startDate, endDate);
-    if (!fetched.length) {
-      console.info(`[prices] symbol=${symbol} tiingo_rows=0`);
-      return;
-    }
-
-    const { error } = await supabaseAdmin.from("prices_daily").upsert(
-      fetched.map((row) => ({
-        symbol: row.symbol,
-        market,
-        date: row.date,
-        adj_close: row.adjClose
-      })),
-      { onConflict: "symbol,market,date", ignoreDuplicates: true }
-    );
-    if (error) throw new Error(`Failed to backfill prices: ${error.message}`);
-    console.info(`[prices] symbol=${symbol} market=${market} upsert_status=ok rows=${fetched.length}`);
-  })().finally(() => {
-    inFlightBackfills.delete(lockKey);
-  });
-
-  inFlightBackfills.set(lockKey, task);
-  await task;
-}
-
-function getTenYearStartDate(endDate: string) {
-  return addYears(parseISO(endDate), -10).toISOString().slice(0, 10);
-}
-
 export async function getOrFetchPricesForSymbols(symbols: string[], startDate: string, endDate: string): Promise<PricePoint[]> {
   const symbolMarkets = await resolveSymbolMarkets(symbols);
-  const uniqueSymbols = symbolMarkets.map((item) => item.symbol);
-  const expectedLatestClose = getExpectedLatestCloseDate();
-  const acceptableLatestWithLeeway = shiftDate(expectedLatestClose, -1);
-  const latestDatePairs = await Promise.all(
-    symbolMarkets.map(async ({ symbol, market }) => {
-      const latest = await getLatestCachedDateByMarket(symbol, market, endDate);
-      return { symbol, market, latest };
-    })
-  );
-
-  const latestByKey = new Map(latestDatePairs.map((x) => [`${x.symbol}|${x.market}`, x.latest]));
-  const latestKnownDates = latestDatePairs.map((x) => x.latest).filter((v): v is string => Boolean(v));
-  const globalLatest = latestKnownDates.length
-    ? latestKnownDates.reduce((acc, cur) => (cur > acc ? cur : acc), latestKnownDates[0])
-    : null;
-
-  const allAtLeastLeeway = latestDatePairs.every((row) => row.latest !== null && row.latest >= acceptableLatestWithLeeway);
-  console.info(
-    `[prices] expected_latest_close=${expectedLatestClose} acceptable_latest_with_leeway=${acceptableLatestWithLeeway} global_latest=${globalLatest ?? "none"} all_at_least_leeway=${allAtLeastLeeway}`
-  );
-
-  const toFetch = allAtLeastLeeway
-    ? []
-    : symbolMarkets.filter(({ symbol, market }) => {
-      const latest = latestByKey.get(`${symbol}|${market}`);
-      if (!latest) return true;
-      return latest < acceptableLatestWithLeeway;
-    });
-
-  console.info(
-    `[prices] symbols=${symbolMarkets.map((x) => `${x.symbol}:${x.market}`).join(",")} symbols_to_fetch=${toFetch.map((x) => `${x.symbol}:${x.market}`).join(",") || "none"}`
-  );
-
-  await Promise.all(
-    toFetch.map(async ({ symbol, market }) => {
-      const latest = latestByKey.get(`${symbol}|${market}`);
-      const fetchStart = latest ? nextDate(latest) : getTenYearStartDate(endDate);
-      if (fetchStart > endDate) {
-        console.info(`[prices] symbol=${symbol} market=${market} skip_fetch=true reason=fetchStart_after_endDate`);
-        return;
-      }
-      console.info(`[prices] symbol=${symbol} market=${market} fetch_start=${fetchStart} fetch_end=${endDate}`);
-      await backfillSymbolIncremental(symbol, market, fetchStart, endDate);
-    })
-  );
-
   const allRows = await Promise.all(symbolMarkets.map(({ symbol, market }) => getCachedPrices(symbol, market, startDate, endDate)));
   for (let i = 0; i < symbolMarkets.length; i += 1) {
     console.info(`[prices] symbol=${symbolMarkets[i].symbol} market=${symbolMarkets[i].market} final_rows=${allRows[i].length}`);
