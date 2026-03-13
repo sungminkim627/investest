@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 156 33% 97%;
+  --foreground: 157 15% 12%;
+  --card: 0 0% 100%;
+  --card-foreground: 157 15% 12%;
+  --primary: 153 64% 31%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 150 24% 94%;
+  --muted-foreground: 158 10% 36%;
+  --border: 155 18% 86%;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  background-image:
+    radial-gradient(circle at 8% 14%, rgb(186 230 210 / 0.5), transparent 36%),
+    radial-gradient(circle at 92% 8%, rgb(203 235 226 / 0.45), transparent 30%),
+    linear-gradient(180deg, rgb(248 252 250), rgb(240 248 244));
+}
+
+.container-page {
+  @apply mx-auto w-full max-w-7xl px-4 md:px-8;
+}
+
+.hairline {
+  @apply border border-border/80;
+}
+
+.subtle-grid {
+  background-image: linear-gradient(rgb(16 24 20 / 0.03) 1px, transparent 1px), linear-gradient(90deg, rgb(16 24 20 / 0.03) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
