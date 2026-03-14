@@ -377,6 +377,28 @@ export function buildPortfolioSeries(
   return rebalanceStrategySeries(holdings, prices, startValue, rebalanceFrequency);
 }
 
+export function buildNoRebalanceSeries(
+  holdings: HoldingInput[],
+  prices: PricePoint[],
+  startValue = 10000
+) {
+  if (holdings.length === 1) {
+    return singleAssetSeries(holdings[0].symbol, prices, startValue);
+  }
+  return rebalanceStrategySeries(holdings, prices, startValue, "none");
+}
+
+export function scaleSeriesToEndValue(series: SeriesPoint[], targetEndValue: number) {
+  if (!series.length) return series;
+  const lastValue = series[series.length - 1]?.value ?? 0;
+  if (!Number.isFinite(lastValue) || lastValue <= 0) return series;
+  const multiplier = targetEndValue / lastValue;
+  return series.map((point) => ({
+    ...point,
+    value: point.value * multiplier
+  }));
+}
+
 export function buildProjectionSeriesFromAssets({
   holdings,
   prices,

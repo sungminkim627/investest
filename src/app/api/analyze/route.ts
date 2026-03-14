@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { startOfWeek, addWeeks, parseISO } from "date-fns";
 import { z } from "zod";
 import {
-  buildPortfolioSeries,
+  buildNoRebalanceSeries,
   buildProjectionSeriesFromAssets,
   computeMetrics,
   computeRiskScore,
@@ -10,6 +10,7 @@ import {
   createComparisonSummary,
   getDateRangeForTimeRange,
   getProjectionMonthsFromSeries,
+  scaleSeriesToEndValue,
   singleAssetSeries
 } from "@/lib/portfolio/engine";
 import { getOrFetchPricesForSymbols } from "@/lib/portfolio/cache";
@@ -55,13 +56,14 @@ export async function POST(request: NextRequest) {
     const allPrices = await loadAllPrices(normalizedHoldings, body.benchmarkSymbol, body.timeRange);
 
     const startValue = body.startValue ?? 10000;
-    const portfolioSeries = buildPortfolioSeries(
+    const rawPortfolioSeries = buildNoRebalanceSeries(
       normalizedHoldings,
       allPrices,
-      startValue,
-      body.rebalanceFrequency ?? "monthly"
+      1
     );
-    const benchmarkSeries = singleAssetSeries(body.benchmarkSymbol, allPrices, startValue);
+    const rawBenchmarkSeries = singleAssetSeries(body.benchmarkSymbol, allPrices, 1);
+    const portfolioSeries = scaleSeriesToEndValue(rawPortfolioSeries, startValue);
+    const benchmarkSeries = scaleSeriesToEndValue(rawBenchmarkSeries, startValue);
 
     const metrics = computeMetrics(portfolioSeries);
     const benchmarkMetrics = computeMetrics(benchmarkSeries);
