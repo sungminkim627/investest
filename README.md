@@ -104,9 +104,15 @@ Autocomplete uses Supabase `public.instruments` as the canonical search source.
    npm run sync:prices:weekly
    ```
    Default behavior is incremental (`3mo`, `1wk` interval) and upserts into `prices_daily`.
+   This run also refreshes instrument metadata (sector, industry, valuations, etc.) from Yahoo Finance.
    For a full 10Y backfill run:
    ```bash
    npm run sync:prices:weekly:backfill
+   ```
+   You can also run only prices or only metadata:
+   ```bash
+   python3 scripts/sync-weekly-prices.py --prices-only
+   python3 scripts/sync-weekly-prices.py --metadata-only
    ```
    Optional env controls:
    - `WEEKLY_PRICE_SYNC_MODE` (`incremental` or `backfill`)
@@ -114,6 +120,8 @@ Autocomplete uses Supabase `public.instruments` as the canonical search source.
    - `WEEKLY_PRICE_BACKFILL_PERIOD` (default `10y`)
    - `WEEKLY_PRICE_BATCH_SIZE`
    - `WEEKLY_PRICE_PAUSE_SECONDS`
+   - `WEEKLY_METADATA_SYNC` (default `1`)
+   - `WEEKLY_METADATA_PAUSE_SECONDS`
 5. This enriches `public.instruments` with:
    - symbol search
    - company/instrument name search
@@ -139,10 +147,8 @@ npm run sync:prices:weekly
 ## Data Caching Flow (Permanent)
 
 On `/api/analyze`:
-1. Check `prices_daily` for each required symbol and date range.
-2. Fetch missing EOD adjusted-close data from Tiingo only when needed.
-3. Upsert into `prices_daily` with `onConflict: symbol,date`.
-4. Re-query and compute portfolio + benchmark analytics.
+1. Read `prices_daily` for each required symbol and date range.
+2. Compute portfolio + benchmark analytics from cached weekly prices.
 
 `prices_daily` stores only:
 - `symbol`

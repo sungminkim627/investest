@@ -14,7 +14,7 @@ Target schema:
   asset_type text not null,      -- 'Stock' or 'ETF'
   market text not null,          -- 'US' or 'CANADA'
   exchange text,
-  valuation numeric,
+  market_cap numeric,
   currency text,
   sector text,
   industry text,
@@ -178,13 +178,13 @@ def build_rows_from_jobs(jobs: List[CsvJob]) -> List[Dict[str, Any]]:
             exchange = compact_text(get_case_insensitive(row, "Exchange")) or None
 
             if job.asset_type == "Stock":
-                valuation = parse_float(get_case_insensitive(row, "Market capitalization"))
+                market_cap = parse_float(get_case_insensitive(row, "Market capitalization"))
                 currency = compact_text(get_case_insensitive(row, "Market capitalization - Currency")) or None
                 sector = compact_text(get_case_insensitive(row, "Sector")) or None
                 industry = compact_text(get_case_insensitive(row, "Industry")) or None
                 category = None
             else:
-                valuation = parse_float(get_case_insensitive(row, "Assets under management"))
+                market_cap = parse_float(get_case_insensitive(row, "Assets under management"))
                 currency = compact_text(get_case_insensitive(row, "Assets under management - Currency")) or None
                 sector = compact_text(get_case_insensitive(row, "Asset class")) or None
                 industry = compact_text(get_case_insensitive(row, "Focus")) or None
@@ -197,7 +197,7 @@ def build_rows_from_jobs(jobs: List[CsvJob]) -> List[Dict[str, Any]]:
                     "asset_type": job.asset_type,
                     "market": job.market,
                     "exchange": exchange,
-                    "valuation": valuation,
+                    "market_cap": market_cap,
                     "currency": currency,
                     "sector": sector,
                     "industry": industry,
@@ -208,7 +208,7 @@ def build_rows_from_jobs(jobs: List[CsvJob]) -> List[Dict[str, Any]]:
 
         print(f"[sync-universe-csv] Loaded {len(rows)} rows from {job.path.name} ({job.asset_type}/{job.market})")
 
-    # Deduplicate by symbol: keep row with highest valuation.
+    # Deduplicate by symbol: keep row with highest market cap (or AUM).
     by_symbol: Dict[str, Dict[str, Any]] = {}
     for row in all_rows:
         symbol = row["symbol"]
@@ -217,8 +217,8 @@ def build_rows_from_jobs(jobs: List[CsvJob]) -> List[Dict[str, Any]]:
             by_symbol[symbol] = row
             continue
 
-        v1 = existing.get("valuation")
-        v2 = row.get("valuation")
+        v1 = existing.get("market_cap")
+        v2 = row.get("market_cap")
         score1 = float(v1) if isinstance(v1, (int, float)) else -1.0
         score2 = float(v2) if isinstance(v2, (int, float)) else -1.0
 
@@ -227,11 +227,11 @@ def build_rows_from_jobs(jobs: List[CsvJob]) -> List[Dict[str, Any]]:
 
     deduped_rows = list(by_symbol.values())
 
-    # Apply target caps by (asset_type, market) using valuation rank.
+    # Apply target caps by (asset_type, market) using market cap/AUM rank.
     capped: List[Dict[str, Any]] = []
     for job in jobs:
         group = [r for r in deduped_rows if r["asset_type"] == job.asset_type and r["market"] == job.market]
-        group.sort(key=lambda r: float(r["valuation"]) if isinstance(r.get("valuation"), (int, float)) else -1.0, reverse=True)
+        group.sort(key=lambda r: float(r["market_cap"]) if isinstance(r.get("market_cap"), (int, float)) else -1.0, reverse=True)
         capped.extend(group[: job.limit])
 
     return capped

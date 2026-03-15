@@ -10,7 +10,20 @@ interface InstrumentRow {
   industry: string | null;
   category: string | null;
   asset_type: string | null;
-  valuation: number | null;
+  long_business_summary?: string | null;
+  market_cap?: number | null;
+  forward_pe?: number | null;
+  trailing_pe?: number | null;
+  beta?: number | null;
+  debt_to_equity?: number | null;
+  return_on_equity?: number | null;
+  total_revenue?: number | null;
+  net_income_to_common?: number | null;
+  dividend_yield?: number | null;
+  year_change_1y?: number | null;
+  year_change_3y?: number | null;
+  year_change_5y?: number | null;
+  year_change_10y?: number | null;
 }
 
 const POPULAR_DEFAULT_SYMBOLS = ["SPY", "VOO", "VTI", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "BND"] as const;
@@ -85,8 +98,8 @@ function mergeUniqueRows(groups: InstrumentRow[][], limit = 10): InstrumentRow[]
 
 function sortByValuation(rows: InstrumentRow[]) {
   return [...rows].sort((a, b) => {
-    const aVal = a.valuation ?? Number.NEGATIVE_INFINITY;
-    const bVal = b.valuation ?? Number.NEGATIVE_INFINITY;
+    const aVal = a.market_cap ?? Number.NEGATIVE_INFINITY;
+    const bVal = b.market_cap ?? Number.NEGATIVE_INFINITY;
     if (aVal !== bVal) return bVal - aVal;
     const symbolCmp = a.symbol.localeCompare(b.symbol, undefined, { numeric: true, sensitivity: "base" });
     if (symbolCmp !== 0) return symbolCmp;
@@ -134,7 +147,21 @@ function mapResult(row: InstrumentRow) {
     sector: row.sector ?? null,
     industry: row.industry ?? null,
     description: descriptor,
-    assetType: row.asset_type ?? null
+    assetType: row.asset_type ?? null,
+    longBusinessSummary: row.long_business_summary ?? null,
+    marketCap: row.market_cap ?? null,
+    forwardPE: row.forward_pe ?? null,
+    trailingPE: row.trailing_pe ?? null,
+    beta: row.beta ?? null,
+    debtToEquity: row.debt_to_equity ?? null,
+    returnOnEquity: row.return_on_equity ?? null,
+    totalRevenue: row.total_revenue ?? null,
+    netIncomeToCommon: row.net_income_to_common ?? null,
+    dividendYield: row.dividend_yield ?? null,
+    yearChange1Y: row.year_change_1y ?? null,
+    yearChange3Y: row.year_change_3y ?? null,
+    yearChange5Y: row.year_change_5y ?? null,
+    yearChange10Y: row.year_change_10y ?? null
   };
 }
 
@@ -186,7 +213,7 @@ export async function GET(request: NextRequest) {
     if (trimmedQuery.length < 1 && !hasFilters) {
       const defaults = await supabaseAdmin
         .from("instruments")
-        .select("symbol,name,market,exchange,sector,industry,category,asset_type,valuation")
+        .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y")
         .in("symbol", [...POPULAR_DEFAULT_SYMBOLS])
         .limit(20);
 
@@ -209,8 +236,8 @@ export async function GET(request: NextRequest) {
 
       const fallback = await supabaseAdmin
         .from("instruments")
-        .select("symbol,name,market,exchange,sector,industry,category,asset_type,valuation")
-        .order("valuation", { ascending: false, nullsFirst: false })
+        .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y")
+        .order("market_cap", { ascending: false, nullsFirst: false })
         .order("symbol", { ascending: true })
         .limit(overfetch);
 
@@ -226,10 +253,10 @@ export async function GET(request: NextRequest) {
     if (trimmedQuery.length < 1 && hasFilters) {
       let filteredQuery = supabaseAdmin
         .from("instruments")
-        .select("symbol,name,market,exchange,sector,industry,category,asset_type,valuation");
+        .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y");
 
       filteredQuery = applyBaseFilters(filteredQuery, filters, otherFieldExclusions)
-        .order("valuation", { ascending: false, nullsFirst: false })
+        .order("market_cap", { ascending: false, nullsFirst: false })
         .order("symbol", { ascending: true })
         .limit(overfetch);
 
@@ -252,25 +279,25 @@ export async function GET(request: NextRequest) {
 
     let bySymbolPrefix = supabaseAdmin
       .from("instruments")
-      .select("symbol,name,market,exchange,sector,industry,category,asset_type,valuation")
+      .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y")
       .ilike("symbol", `${normalizedQuery}%`)
-      .order("valuation", { ascending: false, nullsFirst: false })
+      .order("market_cap", { ascending: false, nullsFirst: false })
       .order("symbol", { ascending: true })
       .limit(overfetch);
 
     let byNameContains = supabaseAdmin
       .from("instruments")
-      .select("symbol,name,market,exchange,sector,industry,category,asset_type,valuation")
+      .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y")
       .ilike("name", `%${trimmedQuery}%`)
-      .order("valuation", { ascending: false, nullsFirst: false })
+      .order("market_cap", { ascending: false, nullsFirst: false })
       .order("symbol", { ascending: true })
       .limit(overfetch);
 
     let byMetaContains = supabaseAdmin
       .from("instruments")
-      .select("symbol,name,market,exchange,sector,industry,category,asset_type,valuation")
+      .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y")
       .or(`sector.ilike.%${trimmedQuery}%,industry.ilike.%${trimmedQuery}%,category.ilike.%${trimmedQuery}%`)
-      .order("valuation", { ascending: false, nullsFirst: false })
+      .order("market_cap", { ascending: false, nullsFirst: false })
       .order("symbol", { ascending: true })
       .limit(overfetch);
 

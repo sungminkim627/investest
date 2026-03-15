@@ -13,6 +13,8 @@
     "clear:prices": "python3 scripts/clear-prices-daily.py",
     "sync:prices:weekly": "python3 scripts/sync-weekly-prices.py",
     "sync:prices:weekly:backfill": "python3 scripts/sync-weekly-prices.py --mode backfill",
+    "sync:prices:weekly:only": "python3 scripts/sync-weekly-prices.py --prices-only",
+    "sync:metadata:weekly": "python3 scripts/sync-weekly-prices.py --metadata-only",
     "sync:universe": "python3 scripts/refresh-symbol-universe-from-csv.py",
     "sync:universe:csv": "python3 scripts/refresh-symbol-universe-from-csv.py",
     "analyze:categories": "python3 scripts/analyze-instrument-categories.py"

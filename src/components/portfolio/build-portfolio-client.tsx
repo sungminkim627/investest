@@ -55,6 +55,20 @@ interface SearchResult {
   industry?: string | null;
   description?: string | null;
   assetType?: string | null;
+  longBusinessSummary?: string | null;
+  marketCap?: number | null;
+  forwardPE?: number | null;
+  trailingPE?: number | null;
+  beta?: number | null;
+  debtToEquity?: number | null;
+  returnOnEquity?: number | null;
+  totalRevenue?: number | null;
+  netIncomeToCommon?: number | null;
+  dividendYield?: number | null;
+  yearChange1Y?: number | null;
+  yearChange3Y?: number | null;
+  yearChange5Y?: number | null;
+  yearChange10Y?: number | null;
 }
 
 interface FilterOption {
@@ -84,6 +98,60 @@ function createRow(symbol = "", weight = 0): BuildRow {
     weight
   };
 }
+
+function formatLargeCurrency(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000_000) return `$${(value / 1_000_000_000_000).toFixed(1)}T`;
+  if (abs >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
+  return `$${Math.round(value).toLocaleString()}`;
+}
+
+function formatPercent(value: number | null | undefined, digits = 1) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+function sizeBadge(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  if (value >= 200_000_000_000) return "Mega Cap";
+  if (value >= 10_000_000_000) return "Large Cap";
+  if (value >= 2_000_000_000) return "Mid Cap";
+  if (value >= 300_000_000) return "Small Cap";
+  return "Micro Cap";
+}
+
+function riskBadge(beta: number | null | undefined) {
+  if (beta === null || beta === undefined || !Number.isFinite(beta)) return { label: "Risk N/A", tone: "slate" as const };
+  if (beta < 0.8) return { label: "Low Risk", tone: "emerald" as const };
+  if (beta <= 1.2) return { label: "Market Risk", tone: "amber" as const };
+  return { label: "High Risk", tone: "rose" as const };
+}
+
+function growthBadge(change1y: number | null | undefined) {
+  if (change1y === null || change1y === undefined || !Number.isFinite(change1y)) {
+    return { label: "Growth N/A", tone: "slate" as const };
+  }
+  if (change1y < 0) return { label: "Declining", tone: "rose" as const };
+  if (change1y < 0.08) return { label: "Steady Growth", tone: "amber" as const };
+  return { label: "High Growth", tone: "emerald" as const };
+}
+
+function scoreBadge(value: number | null | undefined, goodThreshold: number, okThreshold: number) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return { label: "N/A", tone: "slate" as const };
+  if (value >= goodThreshold) return { label: "Good", tone: "emerald" as const };
+  if (value >= okThreshold) return { label: "Okay", tone: "amber" as const };
+  return { label: "Weak", tone: "rose" as const };
+}
+
+const badgeToneClasses: Record<"emerald" | "amber" | "rose" | "slate", string> = {
+  emerald: "bg-emerald-100 text-emerald-700",
+  amber: "bg-amber-100 text-amber-700",
+  rose: "bg-rose-100 text-rose-700",
+  slate: "bg-slate-100 text-slate-600"
+};
 
 export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioMode }) {
   const router = useRouter();
@@ -547,6 +615,24 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                     const alreadyAdded = selectedSymbols.has(result.symbol.toUpperCase());
                     const atLimit = rows.length >= MAX_HOLDINGS;
                     const disabled = alreadyAdded || atLimit;
+                    const sizeValue = result.marketCap ?? null;
+                    const risk = riskBadge(result.beta ?? null);
+                    const growth = growthBadge(result.yearChange1Y ?? result.yearChange3Y ?? null);
+                    const sizeLabel = sizeBadge(sizeValue);
+                    const roeLabel = scoreBadge(result.returnOnEquity ?? null, 0.15, 0.05);
+                    const peValue = result.trailingPE ?? result.forwardPE ?? null;
+                    const peBadge = peValue === null || peValue === undefined || !Number.isFinite(peValue)
+                      ? { label: "N/A", tone: "slate" as const }
+                      : peValue <= 15
+                        ? { label: "Good", tone: "emerald" as const }
+                        : peValue <= 30
+                          ? { label: "Okay", tone: "amber" as const }
+                          : { label: "Expensive", tone: "rose" as const };
+                    const revenueLabel = formatLargeCurrency(result.totalRevenue ?? null);
+                    const profitLabel = formatLargeCurrency(result.netIncomeToCommon ?? null);
+                    const roePct = formatPercent(result.returnOnEquity ?? null, 0);
+                    const peText = peValue !== null && peValue !== undefined && Number.isFinite(peValue) ? peValue.toFixed(1) : null;
+                    const dividendText = formatPercent(result.dividendYield ?? null, 1);
 
                     return (
                       <div
@@ -554,31 +640,92 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                         className="flex items-start justify-between gap-3 rounded-lg px-3 py-2 hover:bg-slate-50"
                       >
                         <div className="min-w-0">
-                          <p className="text-sm font-medium">{result.symbol} - {result.name}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-medium">{result.symbol} - {result.name}</p>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[risk.tone]}`}
+                              title={result.beta !== null && result.beta !== undefined && Number.isFinite(result.beta)
+                                ? `Beta: ${result.beta.toFixed(2)}`
+                                : "Beta not available"}
+                            >
+                              {risk.label}
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[growth.tone]}`}
+                              title={(() => {
+                                const v1 = formatPercent(result.yearChange1Y ?? null, 1);
+                                const v3 = formatPercent(result.yearChange3Y ?? null, 1);
+                                if (v1 && v3) return `1Y: ${v1} · 3Y avg: ${v3}`;
+                                if (v1) return `1Y: ${v1}`;
+                                if (v3) return `3Y avg: ${v3}`;
+                                return "Growth data not available";
+                              })()}
+                            >
+                              {growth.label}
+                            </span>
+                            {sizeLabel ? (
+                              <span
+                                className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+                                title={sizeValue ? `Size: ${formatLargeCurrency(sizeValue)}` : "Size not available"}
+                              >
+                                {sizeLabel}
+                              </span>
+                            ) : null}
+                          </div>
                           <p className="text-xs text-muted-foreground">
-                            {[result.exchange, result.country, result.assetType, result.sector].filter(Boolean).join(" - ")}
+                            {[result.sector, result.industry].filter(Boolean).join(" | ") || [result.exchange, result.country, result.assetType].filter(Boolean).join(" - ")}
                           </p>
-                          {result.description ? (
-                            <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
-                              {result.description.length > 120 ? `${result.description.slice(0, 120)}...` : result.description}
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600">
+                            <span>
+                              ROE: {roePct ?? "—"}{" "}
+                              <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${badgeToneClasses[roeLabel.tone]}`}>
+                                {roeLabel.label}
+                              </span>
+                            </span>
+                            <span>
+                              P/E: {peText ?? "—"}{" "}
+                              <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${badgeToneClasses[peBadge.tone]}`}>
+                                {peBadge.label}
+                              </span>
+                            </span>
+                            <span>Rev: {revenueLabel ?? "—"}</span>
+                            <span>Profit: {profitLabel ?? "—"}</span>
+                            {dividendText ? <span>Yield: {dividendText}</span> : null}
+                          </div>
+                          {result.longBusinessSummary ? (
+                            <p className="mt-1 text-[11px] leading-snug text-slate-500">
+                              {result.longBusinessSummary.length > 140
+                                ? `${result.longBusinessSummary.slice(0, 140)}...`
+                                : result.longBusinessSummary}
                             </p>
                           ) : null}
                         </div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={alreadyAdded ? "secondary" : "default"}
-                          disabled={disabled}
-                          onClick={() => {
-                            if (disabled) return;
-                            const next = createRow(result.symbol.toUpperCase(), 0);
-                            setRows((prev) => [...prev, next]);
-                            setWeightInputByRowId((prev) => ({ ...prev, [next.id]: "" }));
-                          }}
-                          className="shrink-0"
-                        >
-                          <Plus className="mr-1 h-3.5 w-3.5" /> {alreadyAdded ? "Added" : "Add"}
-                        </Button>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {result.longBusinessSummary ? (
+                            <span
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border text-[11px] font-semibold text-slate-600"
+                              title={result.longBusinessSummary}
+                              aria-label="Summary"
+                            >
+                              i
+                            </span>
+                          ) : null}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={alreadyAdded ? "secondary" : "default"}
+                            disabled={disabled}
+                            onClick={() => {
+                              if (disabled) return;
+                              const next = createRow(result.symbol.toUpperCase(), 0);
+                              setRows((prev) => [...prev, next]);
+                              setWeightInputByRowId((prev) => ({ ...prev, [next.id]: "" }));
+                            }}
+                            className="shrink-0"
+                          >
+                            <Plus className="mr-1 h-3.5 w-3.5" /> {alreadyAdded ? "Added" : "Add"}
+                          </Button>
+                        </div>
                       </div>
                     );
                   })
@@ -678,9 +825,9 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                           });
                         }}
                         aria-label="Delete holding"
-                        className="w-full md:w-10"
+                        className="w-full p-0 md:h-10 md:w-10"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Trash2 size={15} />
                       </Button>
                     </div>
                   ))

@@ -49,7 +49,7 @@ def fetch_instruments(supabase_url: str, service_key: str, page_size: int = 1000
     while True:
         query = urlencode(
             {
-                "select": "symbol,name,asset_type,market,sector,industry,category,valuation",
+                "select": "symbol,name,asset_type,market,sector,industry,category,market_cap",
                 "order": "symbol.asc",
                 "limit": str(page_size),
                 "offset": str(offset),
