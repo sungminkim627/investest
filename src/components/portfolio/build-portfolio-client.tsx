@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Info, Plus, Sparkles, Trash2 } from "lucide-react";
 import { HoldingInput } from "@/types";
@@ -64,11 +65,7 @@ interface SearchResult {
   returnOnEquity?: number | null;
   totalRevenue?: number | null;
   netIncomeToCommon?: number | null;
-  dividendYield?: number | null;
   yearChange1Y?: number | null;
-  yearChange3Y?: number | null;
-  yearChange5Y?: number | null;
-  yearChange10Y?: number | null;
 }
 
 interface FilterOption {
@@ -97,6 +94,47 @@ function createRow(symbol = "", weight = 0): BuildRow {
     symbol,
     weight
   };
+}
+
+function SummaryPopover({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const width = 280;
+    const left = Math.min(rect.left, window.innerWidth - width - 12);
+    setPos({ top: rect.bottom + 8, left: Math.max(12, left) });
+  }, [open]);
+
+  return (
+    <span
+      className="inline-flex"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <span
+        ref={triggerRef}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border text-[11px] font-semibold text-slate-600"
+        aria-label="Summary"
+      >
+        i
+      </span>
+      {open && pos
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed z-50 w-72 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
+              style={{ top: pos.top, left: pos.left }}
+            >
+              {content}
+            </div>,
+            document.body
+          )
+        : null}
+    </span>
+  );
 }
 
 function formatLargeCurrency(value: number | null | undefined) {
@@ -521,14 +559,6 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                 <p className="text-sm text-muted-foreground">Search by ticker or company/fund name, then add to your portfolio.</p>
               </div>
 
-              <Input
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                }}
-                placeholder="Search ticker or name (e.g. AAPL, Apple, Vanguard)"
-              />
-
               <div className="flex items-center gap-2">
                 <div className="inline-flex items-center rounded-full border border-border bg-white p-1 text-xs">
                   <Button
@@ -550,13 +580,24 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                     ETF
                   </Button>
                 </div>
+                <Input
+                  className="h-8 flex-1"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                  }}
+                  placeholder="Search ticker or name (e.g. AAPL, Apple, Vanguard)"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
                 <div className="flex flex-1 items-center gap-2">
                   <Select value={sectorFilter} onValueChange={setSectorFilter}>
-                  <SelectTrigger className="h-7 w-[120px] text-[11px]">
-                    <SelectValue placeholder="Sector" />
+                  <SelectTrigger className="h-7 w-[160px] truncate text-[11px]">
+                    <SelectValue placeholder={assetTypeFilter === "ETF" ? "Fund Type" : "Sector"} />
                   </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All Sectors</SelectItem>
+                      <SelectItem value="all">{assetTypeFilter === "ETF" ? "All Fund Types" : "All Sectors"}</SelectItem>
                       {sectorOptions.map((sector) => (
                       <SelectItem key={sector.value} value={sector.value}>
                         {sector.label} ({sector.count})
@@ -566,11 +607,11 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                   </Select>
 
                   <Select value={industryFilter} onValueChange={setIndustryFilter}>
-                  <SelectTrigger className="h-7 w-[120px] text-[11px]">
-                    <SelectValue placeholder="Industry" />
+                  <SelectTrigger className="h-7 w-[160px] truncate text-[11px]">
+                    <SelectValue placeholder={assetTypeFilter === "ETF" ? "Fund Family" : "Industry"} />
                   </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All Industries</SelectItem>
+                      <SelectItem value="all">{assetTypeFilter === "ETF" ? "All Fund Families" : "All Industries"}</SelectItem>
                       {industryOptions.map((industry) => (
                       <SelectItem key={industry.value} value={industry.value}>
                         {industry.label} ({industry.count})
@@ -581,7 +622,7 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
 
                   {assetTypeFilter === "ETF" ? (
                     <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                      <SelectTrigger className="h-7 w-[120px] text-[11px]">
+                      <SelectTrigger className="h-7 w-[160px] truncate text-[11px]">
                         <SelectValue placeholder="Category" />
                       </SelectTrigger>
                       <SelectContent>
@@ -597,8 +638,16 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                {sectorFilter !== "all" ? <span className="rounded-full border px-2 py-0.5">Sector: {sectorFilter}</span> : null}
-                {industryFilter !== "all" ? <span className="rounded-full border px-2 py-0.5">Industry: {industryFilter}</span> : null}
+                {sectorFilter !== "all" ? (
+                  <span className="rounded-full border px-2 py-0.5">
+                    {assetTypeFilter === "ETF" ? "Fund Type" : "Sector"}: {sectorFilter}
+                  </span>
+                ) : null}
+                {industryFilter !== "all" ? (
+                  <span className="rounded-full border px-2 py-0.5">
+                    {assetTypeFilter === "ETF" ? "Fund Family" : "Industry"}: {industryFilter}
+                  </span>
+                ) : null}
                 {assetTypeFilter === "ETF" && categoryFilter !== "all" ? <span className="rounded-full border px-2 py-0.5">Category: {categoryFilter}</span> : null}
               </div>
 
@@ -617,7 +666,7 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                     const disabled = alreadyAdded || atLimit;
                     const sizeValue = result.marketCap ?? null;
                     const risk = riskBadge(result.beta ?? null);
-                    const growth = growthBadge(result.yearChange1Y ?? result.yearChange3Y ?? null);
+                    const growth = growthBadge(result.yearChange1Y ?? null);
                     const sizeLabel = sizeBadge(sizeValue);
                     const roeLabel = scoreBadge(result.returnOnEquity ?? null, 0.15, 0.05);
                     const peValue = result.trailingPE ?? result.forwardPE ?? null;
@@ -632,7 +681,7 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                     const profitLabel = formatLargeCurrency(result.netIncomeToCommon ?? null);
                     const roePct = formatPercent(result.returnOnEquity ?? null, 0);
                     const peText = peValue !== null && peValue !== undefined && Number.isFinite(peValue) ? peValue.toFixed(1) : null;
-                    const dividendText = formatPercent(result.dividendYield ?? null, 1);
+                    const isEtf = String(result.assetType ?? "").toUpperCase() === "ETF";
 
                     return (
                       <div
@@ -640,75 +689,86 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                         className="flex items-start justify-between gap-3 rounded-lg px-3 py-2 hover:bg-slate-50"
                       >
                         <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-medium">{result.symbol} - {result.name}</p>
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[risk.tone]}`}
-                              title={result.beta !== null && result.beta !== undefined && Number.isFinite(result.beta)
-                                ? `Beta: ${result.beta.toFixed(2)}`
-                                : "Beta not available"}
-                            >
-                              {risk.label}
-                            </span>
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[growth.tone]}`}
-                              title={(() => {
-                                const v1 = formatPercent(result.yearChange1Y ?? null, 1);
-                                const v3 = formatPercent(result.yearChange3Y ?? null, 1);
-                                if (v1 && v3) return `1Y: ${v1} · 3Y avg: ${v3}`;
-                                if (v1) return `1Y: ${v1}`;
-                                if (v3) return `3Y avg: ${v3}`;
-                                return "Growth data not available";
-                              })()}
-                            >
-                              {growth.label}
-                            </span>
-                            {sizeLabel ? (
-                              <span
-                                className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
-                                title={sizeValue ? `Size: ${formatLargeCurrency(sizeValue)}` : "Size not available"}
-                              >
-                                {sizeLabel}
+                          <p className="text-sm font-medium">{result.symbol} - {result.name}</p>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <div className="group relative">
+                              <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[risk.tone]}`}>
+                                {risk.label}
                               </span>
+                              <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                                {result.beta !== null && result.beta !== undefined && Number.isFinite(result.beta)
+                                  ? `Beta: ${result.beta.toFixed(2)}`
+                                  : "Beta not available"}
+                              </div>
+                            </div>
+                            <div className="group relative">
+                              <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[growth.tone]}`}>
+                                {growth.label}
+                              </span>
+                              <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-44 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                                {(() => {
+                                  const v1 = formatPercent(result.yearChange1Y ?? null, 1);
+                                  if (v1) return `Growth: ${v1}`;
+                                  return "Growth data not available";
+                                })()}
+                              </div>
+                            </div>
+                            {sizeLabel ? (
+                              <div className="group relative">
+                                <span className="cursor-default rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                                  {sizeLabel}
+                                </span>
+                                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                                  {sizeValue ? `Size: ${formatLargeCurrency(sizeValue)}` : "Size not available"}
+                                </div>
+                              </div>
                             ) : null}
                           </div>
                           <p className="text-xs text-muted-foreground">
                             {[result.sector, result.industry].filter(Boolean).join(" | ") || [result.exchange, result.country, result.assetType].filter(Boolean).join(" - ")}
                           </p>
                           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600">
-                            <span>
-                              ROE: {roePct ?? "—"}{" "}
-                              <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${badgeToneClasses[roeLabel.tone]}`}>
-                                {roeLabel.label}
-                              </span>
-                            </span>
-                            <span>
-                              P/E: {peText ?? "—"}{" "}
-                              <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${badgeToneClasses[peBadge.tone]}`}>
-                                {peBadge.label}
-                              </span>
-                            </span>
-                            <span>Rev: {revenueLabel ?? "—"}</span>
-                            <span>Profit: {profitLabel ?? "—"}</span>
-                            {dividendText ? <span>Yield: {dividendText}</span> : null}
+                            {!isEtf && roePct ? (
+                              <div className="group relative">
+                                <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[roeLabel.tone]}`}>
+                                  Efficiency: {roeLabel.label}
+                                </span>
+                                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                                  ROE: {roePct}
+                                </div>
+                              </div>
+                            ) : null}
+                            {!isEtf && peText ? (
+                              <div className="group relative">
+                                <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[peBadge.tone]}`}>
+                                  Price Tag: {peBadge.label}
+                                </span>
+                                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                                  P/E: {peText}
+                                </div>
+                              </div>
+                            ) : null}
+                            {!isEtf && revenueLabel ? (
+                              <div className="group relative">
+                                <span className="cursor-default">Rev: {revenueLabel}</span>
+                                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                                  Revenue: {revenueLabel}
+                                </div>
+                              </div>
+                            ) : null}
+                            {!isEtf && profitLabel ? (
+                              <div className="group relative">
+                                <span className="cursor-default">Profit: {profitLabel}</span>
+                                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                                  Profit: {profitLabel}
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
-                          {result.longBusinessSummary ? (
-                            <p className="mt-1 text-[11px] leading-snug text-slate-500">
-                              {result.longBusinessSummary.length > 140
-                                ? `${result.longBusinessSummary.slice(0, 140)}...`
-                                : result.longBusinessSummary}
-                            </p>
-                          ) : null}
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
                           {result.longBusinessSummary ? (
-                            <span
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border text-[11px] font-semibold text-slate-600"
-                              title={result.longBusinessSummary}
-                              aria-label="Summary"
-                            >
-                              i
-                            </span>
+                            <SummaryPopover content={result.longBusinessSummary} />
                           ) : null}
                           <Button
                             type="button"

@@ -19,11 +19,7 @@ interface InstrumentRow {
   return_on_equity?: number | null;
   total_revenue?: number | null;
   net_income_to_common?: number | null;
-  dividend_yield?: number | null;
   year_change_1y?: number | null;
-  year_change_3y?: number | null;
-  year_change_5y?: number | null;
-  year_change_10y?: number | null;
 }
 
 const POPULAR_DEFAULT_SYMBOLS = ["SPY", "VOO", "VTI", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "BND"] as const;
@@ -51,7 +47,7 @@ interface SearchFilters {
 }
 
 const PRESET_FILTERS: Record<PresetId, SearchFilters> = {
-  us_large_cap: { assetType: "Stock", market: "US", theme: "Large" },
+  us_large_cap: { assetType: "STOCK", market: "US", theme: "Large" },
   canadian_dividend: { market: "CANADA", theme: "Dividend" },
   tech_sector: { theme: "Tech" },
   emerging_markets: { theme: "Emerging" },
@@ -157,11 +153,7 @@ function mapResult(row: InstrumentRow) {
     returnOnEquity: row.return_on_equity ?? null,
     totalRevenue: row.total_revenue ?? null,
     netIncomeToCommon: row.net_income_to_common ?? null,
-    dividendYield: row.dividend_yield ?? null,
-    yearChange1Y: row.year_change_1y ?? null,
-    yearChange3Y: row.year_change_3y ?? null,
-    yearChange5Y: row.year_change_5y ?? null,
-    yearChange10Y: row.year_change_10y ?? null
+    yearChange1Y: row.year_change_1y ?? null
   };
 }
 
@@ -179,8 +171,10 @@ export async function GET(request: NextRequest) {
     const presetIdRaw = request.nextUrl.searchParams.get("preset") ?? "";
     const presetId = (presetIdRaw in PRESET_FILTERS ? presetIdRaw : "") as PresetId | "";
 
+    const rawAssetType = request.nextUrl.searchParams.get("assetType");
+    const normalizedAssetType = rawAssetType ? rawAssetType.trim().toUpperCase() : undefined;
     const explicitFilters: SearchFilters = {
-      assetType: request.nextUrl.searchParams.get("assetType") ?? undefined,
+      assetType: normalizedAssetType ?? undefined,
       market: request.nextUrl.searchParams.get("market") ?? undefined,
       sector: request.nextUrl.searchParams.get("sector") === "__other__" ? undefined : (request.nextUrl.searchParams.get("sector") ?? undefined),
       industry: request.nextUrl.searchParams.get("industry") === "__other__" ? undefined : (request.nextUrl.searchParams.get("industry") ?? undefined),
@@ -213,7 +207,7 @@ export async function GET(request: NextRequest) {
     if (trimmedQuery.length < 1 && !hasFilters) {
       const defaults = await supabaseAdmin
         .from("instruments")
-        .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y")
+        .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,year_change_1y")
         .in("symbol", [...POPULAR_DEFAULT_SYMBOLS])
         .limit(20);
 
@@ -236,7 +230,7 @@ export async function GET(request: NextRequest) {
 
       const fallback = await supabaseAdmin
         .from("instruments")
-        .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y")
+        .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,year_change_1y")
         .order("market_cap", { ascending: false, nullsFirst: false })
         .order("symbol", { ascending: true })
         .limit(overfetch);
@@ -253,7 +247,7 @@ export async function GET(request: NextRequest) {
     if (trimmedQuery.length < 1 && hasFilters) {
       let filteredQuery = supabaseAdmin
         .from("instruments")
-        .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y");
+        .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,year_change_1y");
 
       filteredQuery = applyBaseFilters(filteredQuery, filters, otherFieldExclusions)
         .order("market_cap", { ascending: false, nullsFirst: false })
@@ -279,7 +273,7 @@ export async function GET(request: NextRequest) {
 
     let bySymbolPrefix = supabaseAdmin
       .from("instruments")
-      .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y")
+      .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,year_change_1y")
       .ilike("symbol", `${normalizedQuery}%`)
       .order("market_cap", { ascending: false, nullsFirst: false })
       .order("symbol", { ascending: true })
@@ -287,7 +281,7 @@ export async function GET(request: NextRequest) {
 
     let byNameContains = supabaseAdmin
       .from("instruments")
-      .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y")
+      .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,year_change_1y")
       .ilike("name", `%${trimmedQuery}%`)
       .order("market_cap", { ascending: false, nullsFirst: false })
       .order("symbol", { ascending: true })
@@ -295,7 +289,7 @@ export async function GET(request: NextRequest) {
 
     let byMetaContains = supabaseAdmin
       .from("instruments")
-      .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,dividend_yield,year_change_1y,year_change_3y,year_change_5y,year_change_10y")
+      .select("symbol,name,market,exchange,sector,industry,category,asset_type,long_business_summary,market_cap,forward_pe,trailing_pe,beta,debt_to_equity,return_on_equity,total_revenue,net_income_to_common,year_change_1y")
       .or(`sector.ilike.%${trimmedQuery}%,industry.ilike.%${trimmedQuery}%,category.ilike.%${trimmedQuery}%`)
       .order("market_cap", { ascending: false, nullsFirst: false })
       .order("symbol", { ascending: true })

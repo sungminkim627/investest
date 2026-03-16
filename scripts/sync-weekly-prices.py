@@ -49,7 +49,6 @@ METADATA_FIELDS = [
     "return_on_equity",
     "total_revenue",
     "net_income_to_common",
-    "dividend_yield",
     "year_change_1y",
 ]
 
@@ -120,7 +119,7 @@ def fetch_instruments(supabase_url: str, service_key: str, page_size: int = 1000
         for row in payload:
             symbol = normalize_symbol(row.get("symbol"))
             market = compact_text(row.get("market")).upper()
-            asset_type = compact_text(row.get("asset_type")).upper() or "STOCK"
+            asset_type = compact_text(row.get("asset_type")) or "Stock"
             name = compact_text(row.get("name"))
             if symbol:
                 symbols.append(InstrumentSymbol(symbol=symbol, market=market or "US", asset_type=asset_type, name=name))
@@ -322,14 +321,21 @@ def fetch_info_batch(yahoo_tickers: List[str]) -> Tuple[Dict[str, Dict[str, Any]
 
 def build_metadata_row(item: InstrumentSymbol, info: Dict[str, Any]) -> Dict[str, Any]:
     asset_type = item.asset_type.upper()
-    sector = parse_text(info.get("sector"))
-    industry = parse_text(info.get("industry"))
-    category = parse_text(info.get("category")) or "Other"
+    raw_category = parse_text(info.get("category"))
+    if asset_type == "ETF":
+        sector = raw_category or "Other"
+        industry = parse_text(info.get("fundFamily"))
+        category = raw_category or "Other"
+    else:
+        sector = parse_text(info.get("sector"))
+        industry = parse_text(info.get("industry"))
+        category = None
     summary = parse_text(info.get("longBusinessSummary"))
 
-    market_cap = parse_number(info.get("marketCap"))
-    if market_cap is None and asset_type == "ETF":
+    if asset_type == "ETF":
         market_cap = parse_number(info.get("totalAssets"))
+    else:
+        market_cap = parse_number(info.get("marketCap"))
 
     row: Dict[str, Any] = {
         "symbol": item.symbol,
@@ -342,15 +348,14 @@ def build_metadata_row(item: InstrumentSymbol, info: Dict[str, Any]) -> Dict[str
         "category": category,
         "long_business_summary": summary,
         "market_cap": market_cap,
-        "forward_pe": parse_number(info.get("forwardPE")),
+        "forward_pe": None if asset_type == "ETF" else parse_number(info.get("forwardPE")),
         "trailing_pe": parse_number(info.get("trailingPE")),
-        "beta": parse_number(info.get("beta")),
-        "debt_to_equity": parse_number(info.get("debtToEquity")),
-        "return_on_equity": parse_number(info.get("returnOnEquity")),
-        "total_revenue": parse_number(info.get("totalRevenue")),
-        "net_income_to_common": parse_number(info.get("netIncomeToCommon")),
-        "dividend_yield": parse_number(info.get("dividendYield")) or 0,
-        "year_change_1y": parse_number(info.get("52WeekChange")),
+        "beta": parse_number(info.get("beta3Year")) if asset_type == "ETF" else parse_number(info.get("beta")),
+        "debt_to_equity": None if asset_type == "ETF" else parse_number(info.get("debtToEquity")),
+        "return_on_equity": None if asset_type == "ETF" else parse_number(info.get("returnOnEquity")),
+        "total_revenue": None if asset_type == "ETF" else parse_number(info.get("totalRevenue")),
+        "net_income_to_common": None if asset_type == "ETF" else parse_number(info.get("netIncomeToCommon")),
+        "year_change_1y": parse_number(info.get("threeYearAverageReturn")) if asset_type == "ETF" else parse_number(info.get("52WeekChange")),
     }
     # Keep a stable set of keys for PostgREST bulk upserts.
     return {field: row.get(field) for field in METADATA_FIELDS}

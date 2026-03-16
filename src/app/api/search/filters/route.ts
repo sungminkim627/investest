@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 const FILTER_TOP_N = 15;
 const OTHER_VALUE = "__other__";
 
-type AssetType = "Stock" | "ETF";
+type AssetType = "STOCK" | "ETF";
 type FilterField = "sector" | "industry" | "category";
 
 interface OptionItem {
@@ -99,7 +99,7 @@ function toOptions(
 export async function GET(request: NextRequest) {
   try {
     const rawAssetType = request.nextUrl.searchParams.get("assetType");
-    const assetType: AssetType = rawAssetType === "ETF" ? "ETF" : "Stock";
+    const assetType: AssetType = rawAssetType && rawAssetType.toUpperCase() === "ETF" ? "ETF" : "STOCK";
     const rawTop = Number(request.nextUrl.searchParams.get("top") ?? FILTER_TOP_N);
     const topN = Number.isFinite(rawTop) ? Math.max(10, Math.min(20, Math.trunc(rawTop))) : FILTER_TOP_N;
     const selected = {

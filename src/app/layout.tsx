@@ -19,7 +19,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
                 <BarChart3 className="h-4 w-4" />
               </span>
-              Investest
+              <span>Investest</span>
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                Beta
+              </span>
             </Link>
             <nav className="flex items-center gap-6 text-sm text-muted-foreground">
               <Link href="/workspace" className="hover:text-foreground">
