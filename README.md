@@ -122,6 +122,35 @@ Autocomplete uses Supabase `public.instruments` as the canonical search source.
    - `WEEKLY_PRICE_PAUSE_SECONDS`
    - `WEEKLY_METADATA_SYNC` (default `1`)
    - `WEEKLY_METADATA_PAUSE_SECONDS`
+
+## Metadata Field Mapping (yfinance → instruments)
+
+### Stocks
+- `sector` ← `info["sector"]`
+- `industry` ← `info["industry"]`
+- `market_cap` ← `info["marketCap"]`
+- `forward_pe` ← `info["forwardPE"]`
+- `beta` ← `info["beta"]`
+- `debt_to_equity` ← `info["debtToEquity"]`
+- `return_on_equity` ← `info["returnOnEquity"]`
+- `total_revenue` ← `info["totalRevenue"]`
+- `net_income_to_common` ← `info["netIncomeToCommon"]`
+- `dividend_yield` ← `info["dividendYield"]` (fallback 0)
+- `year_change_1y` ← `info["52WeekChange"]`
+
+### ETFs
+- `sector` ← `info["category"]` (fallback `"Other"`)
+- `industry` ← `info["fundFamily"]`
+- `category` ← `info["category"]` (fallback `"Other"`)
+- `market_cap` ← `info["totalAssets"]`
+- `forward_pe` ← `null`
+- `beta` ← `info["beta3Year"]`
+- `debt_to_equity` ← `null`
+- `return_on_equity` ← `null`
+- `total_revenue` ← `null`
+- `net_income_to_common` ← `null`
+- `dividend_yield` ← `info["yield"]` (fallback 0)
+- `year_change_1y` ← `info["threeYearAverageReturn"]`
 5. This enriches `public.instruments` with:
    - symbol search
    - company/instrument name search

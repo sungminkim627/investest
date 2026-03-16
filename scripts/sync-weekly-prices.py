@@ -49,6 +49,7 @@ METADATA_FIELDS = [
     "return_on_equity",
     "total_revenue",
     "net_income_to_common",
+    "dividend_yield",
     "year_change_1y",
 ]
 
@@ -355,6 +356,7 @@ def build_metadata_row(item: InstrumentSymbol, info: Dict[str, Any]) -> Dict[str
         "return_on_equity": None if asset_type == "ETF" else parse_number(info.get("returnOnEquity")),
         "total_revenue": None if asset_type == "ETF" else parse_number(info.get("totalRevenue")),
         "net_income_to_common": None if asset_type == "ETF" else parse_number(info.get("netIncomeToCommon")),
+        "dividend_yield": (parse_number(info.get("yield")) if asset_type == "ETF" else parse_number(info.get("dividendYield"))) or 0,
         "year_change_1y": parse_number(info.get("threeYearAverageReturn")) if asset_type == "ETF" else parse_number(info.get("52WeekChange")),
     }
     # Keep a stable set of keys for PostgREST bulk upserts.
