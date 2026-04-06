@@ -165,6 +165,7 @@ function loadGuestPortfolio(): PortfolioItem {
     symbol: h.symbol.toUpperCase(),
     weight: h.weight
   }));
+  const resolvedHoldings = holdings.length ? holdings : [{ symbol: "SPY", weight: 100 }];
   const startValue = Number(localStorage.getItem("investest:startValue") ?? 10000) || 10000;
   const contributionAmount = Number(localStorage.getItem("investest:contributionAmount") ?? 0) || 0;
   const contributionFrequency = (localStorage.getItem("investest:contributionFrequency") as "weekly" | "monthly" | "yearly") ?? "monthly";
@@ -172,7 +173,7 @@ function loadGuestPortfolio(): PortfolioItem {
   return {
     id: "guest",
     name: "My Portfolio",
-    holdings,
+    holdings: resolvedHoldings,
     start_value: startValue,
     contribution_amount: contributionAmount,
     contribution_frequency: contributionFrequency,
@@ -684,7 +685,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
 
   const chartSeries = useMemo(() => {
     return activeItems
-      .map((item, index) => {
+      .map((item) => {
         const data = analysisById[item.id];
         if (!data) return null;
         return {
@@ -695,7 +696,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
           projection: data.portfolioProjection
         };
       })
-      .filter(Boolean);
+      .filter((entry): entry is SeriesEntry => entry !== null);
   }, [activeItems, analysisById]);
 
   const activeCount = activeItems.length;
@@ -950,26 +951,22 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
             ))}
             {!isLoggedIn && lockedSlots > 0 ? (
               <div className="relative rounded-lg border border-dashed border-border bg-white/70 p-2">
-                <div className="space-y-2 blur-sm">
-                  {Array.from({ length: lockedSlots }).map((_, index) => (
-                    <div key={`locked-row-${index}`} className="rounded-lg border border-border bg-white p-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex h-3.5 w-3.5 rounded-full border border-border bg-slate-200" />
-                            <p className="text-sm font-semibold text-muted-foreground">Locked slot</p>
-                          </div>
-                          <p className="mt-1 text-[11px] text-muted-foreground">Sign in to unlock more portfolios.</p>
-                        </div>
+                <div className="rounded-lg border border-border bg-white p-2 blur-sm">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex h-3.5 w-3.5 rounded-full border border-border bg-slate-200" />
+                        <p className="text-sm font-semibold text-muted-foreground">Locked slot</p>
                       </div>
-                      <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-                        <span>Start: —</span>
-                        <span>Contrib: —</span>
-                        <span>Freq: —</span>
-                        <span>Rebalance: —</span>
-                      </div>
+                      <p className="mt-1 text-[11px] text-muted-foreground">Sign in to unlock more portfolios.</p>
                     </div>
-                  ))}
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+                    <span>Start: —</span>
+                    <span>Contrib: —</span>
+                    <span>Freq: —</span>
+                    <span>Rebalance: —</span>
+                  </div>
                 </div>
                 <div className="absolute inset-0 flex items-center justify-center">
                   <Button
@@ -978,7 +975,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
                       window.location.href = `/auth/signin`;
                     }}
                   >
-                    Sign in to unlock
+                    Sign in to unlock 3 more portfolios
                   </Button>
                 </div>
               </div>
