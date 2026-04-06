@@ -6,7 +6,7 @@ import { SeriesPoint } from "@/types";
 
 const COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#ef4444", "#7c3aed", "#0891b2", "#0ea5e9"];
 
-interface SeriesEntry {
+export interface SeriesEntry {
   id: string;
   name: string;
   color?: string;

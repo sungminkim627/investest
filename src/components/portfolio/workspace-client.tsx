@@ -1,10 +1,10 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Edit3, Eye, EyeOff, Info, Plus, Trash2, X } from "lucide-react";
 import { BuildPortfolioClient } from "@/components/portfolio/build-portfolio-client";
-import { PerformanceChartMulti } from "@/components/portfolio/performance-chart-multi";
+import { PerformanceChartMulti, type SeriesEntry } from "@/components/portfolio/performance-chart-multi";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -385,7 +385,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     ].join("|");
   };
 
-  const getCachedAnalysis = (item: PortfolioItem, ctx?: BenchmarkContext) => {
+  const getCachedAnalysis = useCallback((item: PortfolioItem, ctx?: BenchmarkContext) => {
     if (typeof window === "undefined") return null;
     const key = buildAnalysisCacheKey(item, ctx);
     const raw = window.localStorage.getItem(`investest:${key}`);
@@ -399,15 +399,15 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     } catch {
       return null;
     }
-  };
+  }, [buildAnalysisCacheKey]);
 
-  const setCachedAnalysis = (item: PortfolioItem, payload: AnalyzeResponse, ctx?: BenchmarkContext) => {
+  const setCachedAnalysis = useCallback((item: PortfolioItem, payload: AnalyzeResponse, ctx?: BenchmarkContext) => {
     if (typeof window === "undefined") return;
     const key = buildAnalysisCacheKey(item, ctx);
     window.localStorage.setItem(`investest:${key}`, JSON.stringify({ ts: Date.now(), payload }));
-  };
+  }, [buildAnalysisCacheKey]);
 
-  const runAnalysisFor = async (toRun: PortfolioItem[], ctx?: BenchmarkContext) => {
+  const runAnalysisFor = useCallback(async (toRun: PortfolioItem[], ctx?: BenchmarkContext) => {
     if (!toRun.length) return;
 
     const benchmarkCtx: BenchmarkContext = ctx ?? {
@@ -468,7 +468,16 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
         }
       })
     );
-  };
+  }, [
+    benchmarkContributionAmount,
+    benchmarkContributionFrequency,
+    benchmarkRebalanceFrequency,
+    benchmarkStartValue,
+    benchmarkSymbol,
+    getCachedAnalysis,
+    setCachedAnalysis,
+    timeRange
+  ]);
 
   const runAnalysis = async () => {
     const toRun = visibleItems.filter((item) => {
@@ -500,8 +509,9 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     benchmarkContributionFrequency,
     benchmarkRebalanceFrequency,
     isHydrated,
-    items,
-    timeRange
+    runAnalysisFor,
+    timeRange,
+    visibleItems
   ]);
 
   const handleCommit = async (payload: {

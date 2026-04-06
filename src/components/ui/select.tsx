@@ -31,7 +31,7 @@ export function SelectValue(props: React.ComponentProps<typeof SelectPrimitive.V
 export function SelectContent({ className, children, ...props }: React.ComponentProps<typeof SelectPrimitive.Content>) {
   return (
     <SelectPrimitive.Portal>
-      <SelectPrimitive.Content className={cn("z-50 min-w-[10rem] rounded-xl border border-border bg-white p-1", className)} {...props}>
+      <SelectPrimitive.Content className={cn("z-[120] min-w-[10rem] rounded-xl border border-border bg-white p-1", className)} {...props}>
         <SelectPrimitive.Viewport>{children}</SelectPrimitive.Viewport>
       </SelectPrimitive.Content>
     </SelectPrimitive.Portal>
