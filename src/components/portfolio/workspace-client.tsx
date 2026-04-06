@@ -355,7 +355,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     rebalanceFrequency: RebalanceFrequencyOption;
   };
 
-  const buildAnalysisCacheKey = (item: PortfolioItem, ctx?: BenchmarkContext) => {
+  const buildAnalysisCacheKey = useCallback((item: PortfolioItem, ctx?: BenchmarkContext) => {
     const benchmarkCtx: BenchmarkContext = ctx ?? {
       symbol: benchmarkSymbol,
       startValue: benchmarkStartValue,
@@ -383,7 +383,14 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       item.rebalance_frequency,
       holdingsKey
     ].join("|");
-  };
+  }, [
+    benchmarkContributionAmount,
+    benchmarkContributionFrequency,
+    benchmarkRebalanceFrequency,
+    benchmarkStartValue,
+    benchmarkSymbol,
+    timeRange
+  ]);
 
   const getCachedAnalysis = useCallback((item: PortfolioItem, ctx?: BenchmarkContext) => {
     if (typeof window === "undefined") return null;
@@ -694,19 +701,18 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
   };
 
   const chartSeries = useMemo(() => {
-    return activeItems
-      .map((item) => {
-        const data = analysisById[item.id];
-        if (!data) return null;
-        return {
-          id: item.id,
-          name: item.name,
-          color: item.color,
-          series: data.portfolioSeries,
-          projection: data.portfolioProjection
-        };
-      })
-      .filter((entry): entry is SeriesEntry => entry !== null);
+    return activeItems.flatMap((item) => {
+      const data = analysisById[item.id];
+      if (!data) return [];
+      const entry: SeriesEntry = {
+        id: item.id,
+        name: item.name,
+        color: item.color,
+        series: data.portfolioSeries,
+        projection: data.portfolioProjection
+      };
+      return [entry];
+    });
   }, [activeItems, analysisById]);
 
   const activeCount = activeItems.length;
