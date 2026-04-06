@@ -25,12 +25,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </span>
             </Link>
             <nav className="flex items-center gap-6 text-sm text-muted-foreground">
-              <Link href="/workspace" className="hover:text-foreground">
-                Workspace
-              </Link>
-              <Link href="/saved-portfolios" className="hover:text-foreground">
-                Saved
-              </Link>
               <AuthNavButton />
             </nav>
           </div>

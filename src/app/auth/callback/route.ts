@@ -32,5 +32,5 @@ export async function GET(request: Request) {
     await supabase.auth.exchangeCodeForSession(code);
   }
 
-  return NextResponse.redirect(new URL("/saved-portfolios", request.url));
+  return NextResponse.redirect(new URL("/workspace", request.url));
 }

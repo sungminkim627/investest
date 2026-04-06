@@ -28,7 +28,11 @@ const bodySchema = z.object({
   startValue: z.number().positive().optional(),
   contributionAmount: z.number().min(0).optional(),
   contributionFrequency: z.enum(["weekly", "monthly", "yearly"]).optional(),
-  rebalanceFrequency: z.enum(["none", "monthly", "quarterly", "yearly"]).optional()
+  rebalanceFrequency: z.enum(["none", "monthly", "quarterly", "yearly"]).optional(),
+  benchmarkStartValue: z.number().positive().optional(),
+  benchmarkContributionAmount: z.number().min(0).optional(),
+  benchmarkContributionFrequency: z.enum(["weekly", "monthly", "yearly"]).optional(),
+  benchmarkRebalanceFrequency: z.enum(["none", "monthly", "quarterly", "yearly"]).optional()
 });
 
 async function loadAllPrices(holdings: HoldingInput[], benchmarkSymbol: string, timeRange: TimeRange) {
@@ -56,6 +60,7 @@ export async function POST(request: NextRequest) {
     const allPrices = await loadAllPrices(normalizedHoldings, body.benchmarkSymbol, body.timeRange);
 
     const startValue = body.startValue ?? 10000;
+    const benchmarkStartValue = body.benchmarkStartValue ?? startValue;
     const rawPortfolioSeries = buildNoRebalanceSeries(
       normalizedHoldings,
       allPrices,
@@ -63,7 +68,7 @@ export async function POST(request: NextRequest) {
     );
     const rawBenchmarkSeries = singleAssetSeries(body.benchmarkSymbol, allPrices, 1);
     const portfolioSeries = scaleSeriesToEndValue(rawPortfolioSeries, startValue);
-    const benchmarkSeries = scaleSeriesToEndValue(rawBenchmarkSeries, startValue);
+    const benchmarkSeries = scaleSeriesToEndValue(rawBenchmarkSeries, benchmarkStartValue);
 
     const metrics = computeMetrics(portfolioSeries);
     const benchmarkMetrics = computeMetrics(benchmarkSeries);
@@ -103,9 +108,9 @@ export async function POST(request: NextRequest) {
           lastActualValue: benchmarkSeries[benchmarkSeries.length - 1].value,
           projectionStartDate,
           projectionMonths,
-          contributionAmount: body.contributionAmount ?? 0,
-          contributionFrequency: body.contributionFrequency ?? "monthly",
-          rebalanceFrequency: "none"
+          contributionAmount: body.benchmarkContributionAmount ?? body.contributionAmount ?? 0,
+          contributionFrequency: body.benchmarkContributionFrequency ?? body.contributionFrequency ?? "monthly",
+          rebalanceFrequency: body.benchmarkRebalanceFrequency ?? "none"
         })
       : [];
 

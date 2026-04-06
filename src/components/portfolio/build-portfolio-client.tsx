@@ -105,8 +105,11 @@ function SummaryPopover({ content }: { content: string }) {
     if (!open || !triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
     const width = 280;
+    const height = 180;
     const left = Math.min(rect.left, window.innerWidth - width - 12);
-    setPos({ top: rect.bottom + 8, left: Math.max(12, left) });
+    const defaultTop = rect.bottom + 8;
+    const top = defaultTop + height > window.innerHeight ? Math.max(12, rect.top - height - 8) : defaultTop;
+    setPos({ top, left: Math.max(12, left) });
   }, [open]);
 
   return (
@@ -126,7 +129,7 @@ function SummaryPopover({ content }: { content: string }) {
         ? createPortal(
             <div
               className="pointer-events-none fixed z-50 w-72 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
-              style={{ top: pos.top, left: pos.left }}
+              style={{ top: pos.top, left: pos.left, maxHeight: 200, overflow: "hidden" }}
             >
               {content}
             </div>,
@@ -134,6 +137,44 @@ function SummaryPopover({ content }: { content: string }) {
           )
         : null}
     </span>
+  );
+}
+
+function InfoPopover({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const width = 260;
+    const left = Math.min(rect.left, window.innerWidth - width - 12);
+    setPos({ top: rect.bottom + 8, left: Math.max(12, left) });
+  }, [open]);
+
+  return (
+    <>
+      <span
+        ref={triggerRef}
+        className="inline-flex"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+      >
+        <Info className="h-3.5 w-3.5 text-muted-foreground" />
+      </span>
+      {open && pos
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed z-50 w-64 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
+              style={{ top: pos.top, left: pos.left }}
+            >
+              {content}
+            </div>,
+            document.body
+          )
+        : null}
+    </>
   );
 }
 
@@ -191,7 +232,59 @@ const badgeToneClasses: Record<"emerald" | "amber" | "rose" | "slate", string> =
   slate: "bg-slate-100 text-slate-600"
 };
 
-export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioMode }) {
+interface BuildPortfolioClientProps {
+  mode?: BuildPortfolioMode;
+  initialName?: string;
+  initialHoldings?: HoldingInput[];
+  initialStartValue?: number;
+  initialContributionAmount?: number;
+  initialContributionFrequency?: "weekly" | "monthly" | "yearly";
+  initialRebalanceFrequency?: RebalanceFrequencyOption;
+  persistToLocalStorage?: boolean;
+  showSavePortfolio?: boolean;
+  showRunAnalysis?: boolean;
+  commitLabel?: string;
+  commitButtonId?: string;
+  hideCommitButton?: boolean;
+  showContributionPanel?: boolean;
+  externalInputs?: {
+    startValueInput: string;
+    setStartValueInput: (value: string) => void;
+    contributionAmountInput: string;
+    setContributionAmountInput: (value: string) => void;
+    contributionFrequency: "weekly" | "monthly" | "yearly";
+    setContributionFrequency: (value: "weekly" | "monthly" | "yearly") => void;
+    rebalanceFrequency: RebalanceFrequencyOption;
+    setRebalanceFrequency: (value: RebalanceFrequencyOption) => void;
+  };
+  onCommit?: (payload: {
+    name: string;
+    holdings: HoldingInput[];
+    startValue: number;
+    contributionAmount: number;
+    contributionFrequency: "weekly" | "monthly" | "yearly";
+    rebalanceFrequency: RebalanceFrequencyOption;
+  }) => void;
+}
+
+export function BuildPortfolioClient({
+  mode = "page",
+  initialName,
+  initialHoldings,
+  initialStartValue,
+  initialContributionAmount,
+  initialContributionFrequency,
+  initialRebalanceFrequency,
+  persistToLocalStorage = true,
+  showSavePortfolio = true,
+  showRunAnalysis = true,
+  commitLabel = "Save Changes",
+  commitButtonId,
+  hideCommitButton = false,
+  showContributionPanel = true,
+  externalInputs,
+  onCommit
+}: BuildPortfolioClientProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -200,7 +293,7 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
   const [weightInputByRowId, setWeightInputByRowId] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [savePortfolioName, setSavePortfolioName] = useState("");
+  const [savePortfolioName, setSavePortfolioName] = useState(initialName ?? "");
   const [savePortfolioBusy, setSavePortfolioBusy] = useState(false);
   const [savePortfolioMessage, setSavePortfolioMessage] = useState<string | null>(null);
   const [selectedStarterId, setSelectedStarterId] = useState<string | null>(mode === "workspace" ? "scratch" : null);
@@ -214,15 +307,32 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
   const [categoryOptions, setCategoryOptions] = useState<FilterOption[]>([]);
   const [filterMatchCount, setFilterMatchCount] = useState<number | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchCache, setSearchCache] = useState<Record<string, { results: SearchResult[]; total: number | null }>>({});
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchPage, setSearchPage] = useState(0);
   const [hasMoreResults, setHasMoreResults] = useState(true);
   const [totalSearchResults, setTotalSearchResults] = useState<number | null>(null);
   const isWorkspace = mode === "workspace";
-  const [startValueInput, setStartValueInput] = useState("10000");
-  const [contributionAmountInput, setContributionAmountInput] = useState("");
-  const [contributionFrequency, setContributionFrequency] = useState<"weekly" | "monthly" | "yearly">("monthly");
-  const [rebalanceFrequency, setRebalanceFrequency] = useState<RebalanceFrequencyOption>("monthly");
+  const [startValueInput, setStartValueInput] = useState(
+    initialStartValue !== undefined && initialStartValue !== null ? String(initialStartValue) : "10000"
+  );
+  const [contributionAmountInput, setContributionAmountInput] = useState(
+    initialContributionAmount !== undefined && initialContributionAmount !== null ? String(initialContributionAmount) : ""
+  );
+  const [contributionFrequency, setContributionFrequency] = useState<"weekly" | "monthly" | "yearly">(
+    initialContributionFrequency ?? "monthly"
+  );
+  const [rebalanceFrequency, setRebalanceFrequency] = useState<RebalanceFrequencyOption>(
+    initialRebalanceFrequency ?? "none"
+  );
+  const startValueInputValue = externalInputs?.startValueInput ?? startValueInput;
+  const setStartValueInputValue = externalInputs?.setStartValueInput ?? setStartValueInput;
+  const contributionAmountInputValue = externalInputs?.contributionAmountInput ?? contributionAmountInput;
+  const setContributionAmountInputValue = externalInputs?.setContributionAmountInput ?? setContributionAmountInput;
+  const contributionFrequencyValue = externalInputs?.contributionFrequency ?? contributionFrequency;
+  const setContributionFrequencyValue = externalInputs?.setContributionFrequency ?? setContributionFrequency;
+  const rebalanceFrequencyValue = externalInputs?.rebalanceFrequency ?? rebalanceFrequency;
+  const setRebalanceFrequencyValue = externalInputs?.setRebalanceFrequency ?? setRebalanceFrequency;
 
   const applyHoldings = (holdings: HoldingInput[]) => {
     const nextRows = holdings.map((h) => createRow(h.symbol, h.weight));
@@ -254,6 +364,12 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
   }, [rows]);
 
   useEffect(() => {
+    if (initialHoldings && initialHoldings.length) {
+      applyHoldings(initialHoldings);
+      setSelectedStarterId("custom");
+      return;
+    }
+    if (!persistToLocalStorage) return;
     const template = searchParams.get("template");
     if (template) {
       const parsed = parseTemplate(template);
@@ -276,22 +392,23 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
         // ignore draft parse errors
       }
     }
-  }, [searchParams]);
+  }, [searchParams, initialHoldings, persistToLocalStorage]);
 
   useEffect(() => {
+    if (!persistToLocalStorage) return;
     const savedStartValue = window.localStorage.getItem("investest:startValue");
     const savedContributionAmount = window.localStorage.getItem("investest:contributionAmount");
     const savedContributionFrequency = window.localStorage.getItem("investest:contributionFrequency");
     const savedRebalanceFrequency = window.localStorage.getItem("investest:rebalanceFrequency");
 
     if (savedStartValue && Number.isFinite(Number(savedStartValue))) {
-      setStartValueInput(String(savedStartValue));
+      setStartValueInputValue(String(savedStartValue));
     }
     if (savedContributionAmount && Number.isFinite(Number(savedContributionAmount))) {
-      setContributionAmountInput(String(savedContributionAmount));
+      setContributionAmountInputValue(String(savedContributionAmount));
     }
     if (savedContributionFrequency === "weekly" || savedContributionFrequency === "monthly" || savedContributionFrequency === "yearly") {
-      setContributionFrequency(savedContributionFrequency);
+      setContributionFrequencyValue(savedContributionFrequency);
     }
     if (
       savedRebalanceFrequency === "none" ||
@@ -299,9 +416,11 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
       savedRebalanceFrequency === "quarterly" ||
       savedRebalanceFrequency === "yearly"
     ) {
-      setRebalanceFrequency(savedRebalanceFrequency);
+      setRebalanceFrequencyValue(savedRebalanceFrequency);
+    } else if (!savedRebalanceFrequency) {
+      setRebalanceFrequencyValue("none");
     }
-  }, []);
+  }, [persistToLocalStorage, setContributionAmountInputValue, setContributionFrequencyValue, setRebalanceFrequencyValue, setStartValueInputValue]);
 
   useEffect(() => {
     if (selectedStarterId === null) return;
@@ -311,19 +430,33 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
     const delay = trimmed.length > 0 ? 300 : 0;
 
     const timer = setTimeout(async () => {
+      const params = new URLSearchParams({ query: trimmed, limit: "100", offset: String(searchPage * 100) });
+      params.set("assetType", assetTypeFilter);
+      if (sectorFilter !== "all") {
+        params.set("sector", sectorFilter);
+      }
+      if (industryFilter !== "all") {
+        params.set("industry", industryFilter);
+      }
+      if (assetTypeFilter === "ETF" && categoryFilter !== "all") {
+        params.set("category", categoryFilter);
+      }
+      const cacheKey = params.toString();
+      const cached = searchCache[cacheKey];
+      if (cached && !cancelled) {
+        setSearchResults(cached.results);
+        setTotalSearchResults(cached.total);
+        if (cached.total !== null) {
+          setHasMoreResults((searchPage + 1) * 100 < cached.total);
+        } else {
+          setHasMoreResults(cached.results.length === 100);
+        }
+        setSearchLoading(false);
+        return;
+      }
+
       setSearchLoading(true);
       try {
-        const params = new URLSearchParams({ query: trimmed, limit: "100", offset: String(searchPage * 100) });
-        params.set("assetType", assetTypeFilter);
-        if (sectorFilter !== "all") {
-          params.set("sector", sectorFilter);
-        }
-        if (industryFilter !== "all") {
-          params.set("industry", industryFilter);
-        }
-        if (assetTypeFilter === "ETF" && categoryFilter !== "all") {
-          params.set("category", categoryFilter);
-        }
         const res = await fetch(`/api/search?${params.toString()}`);
         if (!res.ok) {
           if (!cancelled) setSearchResults([]);
@@ -335,6 +468,10 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
           setSearchResults(incoming);
           const total = typeof data.total === "number" ? data.total : null;
           setTotalSearchResults(total);
+          setSearchCache((prev) => ({
+            ...prev,
+            [cacheKey]: { results: incoming, total }
+          }));
           if (total !== null) {
             setHasMoreResults((searchPage + 1) * 100 < total);
           } else {
@@ -352,7 +489,39 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [searchQuery, selectedStarterId, assetTypeFilter, sectorFilter, industryFilter, categoryFilter, searchPage]);
+  }, [searchQuery, selectedStarterId, assetTypeFilter, sectorFilter, industryFilter, categoryFilter, searchPage, searchCache]);
+
+  useEffect(() => {
+    if (selectedStarterId === null) return;
+    let cancelled = false;
+    const prime = async (assetType: "STOCK" | "ETF") => {
+      const params = new URLSearchParams({ query: "", limit: "100", offset: "0", assetType });
+      const cacheKey = params.toString();
+      if (searchCache[cacheKey]) return;
+      try {
+        const res = await fetch(`/api/search?${cacheKey}`);
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { results?: SearchResult[]; total?: number };
+        if (cancelled) return;
+        setSearchCache((prev) => ({
+          ...prev,
+          [cacheKey]: {
+            results: data.results ?? [],
+            total: typeof data.total === "number" ? data.total : null
+          }
+        }));
+      } catch {
+        // ignore prefetch errors
+      }
+    };
+
+    void prime("STOCK");
+    void prime("ETF");
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStarterId, searchCache]);
 
   useEffect(() => {
     if (selectedStarterId === null) return;
@@ -395,11 +564,11 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
   }, [searchQuery, assetTypeFilter, sectorFilter, industryFilter, categoryFilter]);
 
   const totalWeight = useMemo(() => rows.reduce((acc, row) => acc + row.weight, 0), [rows]);
-  const startValue = Number.isFinite(Number(startValueInput.replace(/,/g, "")))
-    ? Number(startValueInput.replace(/,/g, ""))
+  const startValue = Number.isFinite(Number(startValueInputValue.replace(/,/g, "")))
+    ? Number(startValueInputValue.replace(/,/g, ""))
     : 0;
-  const contributionAmount = Number.isFinite(Number(contributionAmountInput.replace(/,/g, "")))
-    ? Number(contributionAmountInput.replace(/,/g, ""))
+  const contributionAmount = Number.isFinite(Number(contributionAmountInputValue.replace(/,/g, "")))
+    ? Number(contributionAmountInputValue.replace(/,/g, ""))
     : 0;
 
   const normalizeWeights = () => {
@@ -414,6 +583,7 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
   };
 
   const saveConfig = () => {
+    if (!persistToLocalStorage) return;
     const filtered = rows.filter((row) => row.symbol.trim() && row.weight > 0);
     localStorage.setItem(
       "investest:holdings",
@@ -421,22 +591,177 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
     );
     localStorage.setItem("investest:startValue", String(startValue));
     localStorage.setItem("investest:contributionAmount", String(contributionAmount));
-    localStorage.setItem("investest:contributionFrequency", contributionFrequency);
-    localStorage.setItem("investest:rebalanceFrequency", rebalanceFrequency);
+    localStorage.setItem("investest:contributionFrequency", contributionFrequencyValue);
+    localStorage.setItem("investest:rebalanceFrequency", rebalanceFrequencyValue);
     window.dispatchEvent(new CustomEvent("investest:holdings-updated"));
   };
 
   useEffect(() => {
+    if (!persistToLocalStorage) return;
     const holdingsDraft = rows
       .filter((row) => row.symbol.trim().length > 0 || row.weight > 0)
       .map((row) => ({ symbol: row.symbol.toUpperCase(), weight: row.weight } satisfies HoldingInput));
     window.localStorage.setItem("investest:buildDraft", JSON.stringify({ holdings: holdingsDraft }));
-  }, [rows]);
+  }, [rows, persistToLocalStorage]);
 
-  const selectedSymbols = new Set(rows.map((row) => row.symbol.toUpperCase()));
+  const symbolKey = useMemo(() => rows.map((row) => row.symbol.toUpperCase()).join("|"), [rows]);
   const activeHoldings = rows
     .filter((row) => row.symbol.trim().length > 0 && row.weight > 0)
     .map((row) => ({ symbol: row.symbol.toUpperCase(), weight: row.weight }));
+
+  const handleAddSymbol = useMemo(() => {
+    return (symbol: string) => {
+      let newRow: BuildRow | null = null;
+      setRows((prev) => {
+        const upper = symbol.toUpperCase();
+        if (prev.length >= MAX_HOLDINGS) return prev;
+        if (prev.some((row) => row.symbol.toUpperCase() === upper)) return prev;
+        newRow = createRow(upper, 0);
+        return [...prev, newRow];
+      });
+      if (newRow) {
+        setWeightInputByRowId((prev) => ({ ...prev, [newRow!.id]: "" }));
+      }
+    };
+  }, [setRows, setWeightInputByRowId]);
+
+  const searchResultsContent = useMemo(() => {
+    if (searchLoading) {
+      return <div className="px-3 py-2 text-xs text-muted-foreground">Searching...</div>;
+    }
+    if (searchResults.length === 0 && searchQuery.trim().length > 0) {
+      return <div className="px-3 py-2 text-xs text-muted-foreground">No results</div>;
+    }
+    if (searchResults.length === 0) {
+      return <div className="px-3 py-2 text-xs text-muted-foreground">No popular instruments available</div>;
+    }
+
+    const selectedSymbols = new Set(symbolKey ? symbolKey.split("|") : []);
+    return searchResults.map((result, index) => {
+      const alreadyAdded = selectedSymbols.has(result.symbol.toUpperCase());
+      const atLimit = rows.length >= MAX_HOLDINGS;
+      const disabled = alreadyAdded || atLimit;
+      const sizeValue = result.marketCap ?? null;
+      const risk = riskBadge(result.beta ?? null);
+      const growth = growthBadge(result.yearChange1Y ?? null);
+      const sizeLabel = sizeBadge(sizeValue);
+      const roeLabel = scoreBadge(result.returnOnEquity ?? null, 0.15, 0.05);
+      const peValue = result.trailingPE ?? result.forwardPE ?? null;
+      const peBadge = peValue === null || peValue === undefined || !Number.isFinite(peValue)
+        ? { label: "N/A", tone: "slate" as const }
+        : peValue <= 15
+          ? { label: "Good", tone: "emerald" as const }
+          : peValue <= 30
+            ? { label: "Okay", tone: "amber" as const }
+            : { label: "Expensive", tone: "rose" as const };
+      const revenueLabel = formatLargeCurrency(result.totalRevenue ?? null);
+      const profitLabel = formatLargeCurrency(result.netIncomeToCommon ?? null);
+      const roePct = formatPercent(result.returnOnEquity ?? null, 0);
+      const peText = peValue !== null && peValue !== undefined && Number.isFinite(peValue) ? peValue.toFixed(1) : null;
+      const isEtf = String(result.assetType ?? "").toUpperCase() === "ETF";
+
+      return (
+        <div
+          key={`${result.symbol}-${result.exchange}-${result.name}-${index}`}
+          className="flex items-start justify-between gap-3 rounded-lg px-3 py-2 hover:bg-slate-50"
+        >
+          <div className="min-w-0">
+            <p className="text-sm font-medium">{result.symbol} - {result.name}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <div className="group relative">
+                <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[risk.tone]}`}>
+                  {risk.label}
+                </span>
+                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                  {result.beta !== null && result.beta !== undefined && Number.isFinite(result.beta)
+                    ? `Beta: ${result.beta.toFixed(2)}`
+                    : "Beta not available"}
+                </div>
+              </div>
+              <div className="group relative">
+                <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[growth.tone]}`}>
+                  {growth.label}
+                </span>
+                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-44 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                  {(() => {
+                    const v1 = formatPercent(result.yearChange1Y ?? null, 1);
+                    if (v1) return `Growth: ${v1}`;
+                    return "Growth data not available";
+                  })()}
+                </div>
+              </div>
+              {sizeLabel ? (
+                <div className="group relative">
+                  <span className="cursor-default rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                    {sizeLabel}
+                  </span>
+                  <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                    {sizeValue ? `Size: ${formatLargeCurrency(sizeValue)}` : "Size not available"}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {[result.sector, result.industry].filter(Boolean).join(" | ") || [result.exchange, result.country, result.assetType].filter(Boolean).join(" - ")}
+            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600">
+              {!isEtf && roePct ? (
+                <div className="group relative">
+                  <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[roeLabel.tone]}`}>
+                    Efficiency: {roeLabel.label}
+                  </span>
+                  <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                    ROE: {roePct}
+                  </div>
+                </div>
+              ) : null}
+              {!isEtf && peText ? (
+                <div className="group relative">
+                  <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[peBadge.tone]}`}>
+                    Price Tag: {peBadge.label}
+                  </span>
+                  <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                    P/E: {peText}
+                  </div>
+                </div>
+              ) : null}
+              {!isEtf && revenueLabel ? (
+                <div className="group relative">
+                  <span className="cursor-default">Rev: {revenueLabel}</span>
+                  <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                    Revenue: {revenueLabel}
+                  </div>
+                </div>
+              ) : null}
+              {!isEtf && profitLabel ? (
+                <div className="group relative">
+                  <span className="cursor-default">Profit: {profitLabel}</span>
+                  <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
+                    Profit: {profitLabel}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {result.longBusinessSummary ? (
+              <SummaryPopover content={result.longBusinessSummary} />
+            ) : null}
+            <Button
+              type="button"
+              size="sm"
+              variant={alreadyAdded ? "secondary" : "default"}
+              disabled={disabled}
+              onClick={() => handleAddSymbol(result.symbol)}
+              className="shrink-0"
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" /> {alreadyAdded ? "Added" : "Add"}
+            </Button>
+          </div>
+        </div>
+      );
+    });
+  }, [searchLoading, searchResults, searchQuery, symbolKey, rows.length, handleAddSymbol]);
 
   const savePortfolio = async () => {
     setSavePortfolioMessage(null);
@@ -473,8 +798,8 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
         .eq("user_id", user.id);
 
       if (countError) throw countError;
-      if ((count ?? 0) >= 5) {
-        setSavePortfolioMessage("Free tier limit reached (5 portfolios). Delete one to save another.");
+      if ((count ?? 0) >= 4) {
+        setSavePortfolioMessage("Free tier limit reached (4 portfolios). Delete one to save another.");
         return;
       }
 
@@ -485,8 +810,8 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
           name: savePortfolioName.trim(),
           start_value: startValue,
           contribution_amount: contributionAmount,
-          contribution_frequency: contributionFrequency,
-          rebalance_frequency: rebalanceFrequency
+          contribution_frequency: contributionFrequencyValue,
+          rebalance_frequency: rebalanceFrequencyValue
         }])
         .select("id")
         .single();
@@ -586,14 +911,14 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                   onChange={(e) => {
                     setSearchQuery(e.target.value);
                   }}
-                  placeholder="Search ticker or name (e.g. AAPL, Apple, Vanguard)"
+                  placeholder="Search ticker or name (e.g. AAPL, Apple)"
                 />
               </div>
 
               <div className="flex items-center gap-2">
-                <div className="flex flex-1 items-center gap-2">
+                <div className="flex flex-1 flex-wrap items-center gap-2">
                   <Select value={sectorFilter} onValueChange={setSectorFilter}>
-                  <SelectTrigger className="h-7 w-[160px] truncate text-[11px]">
+                  <SelectTrigger className="h-7 w-[150px] min-w-0 truncate text-[11px]">
                     <SelectValue placeholder={assetTypeFilter === "ETF" ? "Fund Type" : "Sector"} />
                   </SelectTrigger>
                     <SelectContent>
@@ -607,7 +932,7 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                   </Select>
 
                   <Select value={industryFilter} onValueChange={setIndustryFilter}>
-                  <SelectTrigger className="h-7 w-[160px] truncate text-[11px]">
+                  <SelectTrigger className="h-7 w-[150px] min-w-0 truncate text-[11px]">
                     <SelectValue placeholder={assetTypeFilter === "ETF" ? "Fund Family" : "Industry"} />
                   </SelectTrigger>
                     <SelectContent>
@@ -622,7 +947,7 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
 
                   {assetTypeFilter === "ETF" ? (
                     <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                      <SelectTrigger className="h-7 w-[160px] truncate text-[11px]">
+                      <SelectTrigger className="h-7 w-[150px] min-w-0 truncate text-[11px]">
                         <SelectValue placeholder="Category" />
                       </SelectTrigger>
                       <SelectContent>
@@ -653,143 +978,7 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
 
 
               <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border bg-white p-1 shadow-soft">
-                {searchLoading ? (
-                  <div className="px-3 py-2 text-xs text-muted-foreground">Searching...</div>
-                ) : searchResults.length === 0 && searchQuery.trim().length > 0 ? (
-                  <div className="px-3 py-2 text-xs text-muted-foreground">No results</div>
-                ) : searchResults.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-muted-foreground">No popular instruments available</div>
-                ) : (
-                  searchResults.map((result, index) => {
-                    const alreadyAdded = selectedSymbols.has(result.symbol.toUpperCase());
-                    const atLimit = rows.length >= MAX_HOLDINGS;
-                    const disabled = alreadyAdded || atLimit;
-                    const sizeValue = result.marketCap ?? null;
-                    const risk = riskBadge(result.beta ?? null);
-                    const growth = growthBadge(result.yearChange1Y ?? null);
-                    const sizeLabel = sizeBadge(sizeValue);
-                    const roeLabel = scoreBadge(result.returnOnEquity ?? null, 0.15, 0.05);
-                    const peValue = result.trailingPE ?? result.forwardPE ?? null;
-                    const peBadge = peValue === null || peValue === undefined || !Number.isFinite(peValue)
-                      ? { label: "N/A", tone: "slate" as const }
-                      : peValue <= 15
-                        ? { label: "Good", tone: "emerald" as const }
-                        : peValue <= 30
-                          ? { label: "Okay", tone: "amber" as const }
-                          : { label: "Expensive", tone: "rose" as const };
-                    const revenueLabel = formatLargeCurrency(result.totalRevenue ?? null);
-                    const profitLabel = formatLargeCurrency(result.netIncomeToCommon ?? null);
-                    const roePct = formatPercent(result.returnOnEquity ?? null, 0);
-                    const peText = peValue !== null && peValue !== undefined && Number.isFinite(peValue) ? peValue.toFixed(1) : null;
-                    const isEtf = String(result.assetType ?? "").toUpperCase() === "ETF";
-
-                    return (
-                      <div
-                        key={`${result.symbol}-${result.exchange}-${result.name}-${index}`}
-                        className="flex items-start justify-between gap-3 rounded-lg px-3 py-2 hover:bg-slate-50"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">{result.symbol} - {result.name}</p>
-                          <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <div className="group relative">
-                              <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[risk.tone]}`}>
-                                {risk.label}
-                              </span>
-                              <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                                {result.beta !== null && result.beta !== undefined && Number.isFinite(result.beta)
-                                  ? `Beta: ${result.beta.toFixed(2)}`
-                                  : "Beta not available"}
-                              </div>
-                            </div>
-                            <div className="group relative">
-                              <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[growth.tone]}`}>
-                                {growth.label}
-                              </span>
-                              <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-44 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                                {(() => {
-                                  const v1 = formatPercent(result.yearChange1Y ?? null, 1);
-                                  if (v1) return `Growth: ${v1}`;
-                                  return "Growth data not available";
-                                })()}
-                              </div>
-                            </div>
-                            {sizeLabel ? (
-                              <div className="group relative">
-                                <span className="cursor-default rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                                  {sizeLabel}
-                                </span>
-                                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                                  {sizeValue ? `Size: ${formatLargeCurrency(sizeValue)}` : "Size not available"}
-                                </div>
-                              </div>
-                            ) : null}
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            {[result.sector, result.industry].filter(Boolean).join(" | ") || [result.exchange, result.country, result.assetType].filter(Boolean).join(" - ")}
-                          </p>
-                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600">
-                            {!isEtf && roePct ? (
-                              <div className="group relative">
-                                <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[roeLabel.tone]}`}>
-                                  Efficiency: {roeLabel.label}
-                                </span>
-                                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                                  ROE: {roePct}
-                                </div>
-                              </div>
-                            ) : null}
-                            {!isEtf && peText ? (
-                              <div className="group relative">
-                                <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[peBadge.tone]}`}>
-                                  Price Tag: {peBadge.label}
-                                </span>
-                                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                                  P/E: {peText}
-                                </div>
-                              </div>
-                            ) : null}
-                            {!isEtf && revenueLabel ? (
-                              <div className="group relative">
-                                <span className="cursor-default">Rev: {revenueLabel}</span>
-                                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                                  Revenue: {revenueLabel}
-                                </div>
-                              </div>
-                            ) : null}
-                            {!isEtf && profitLabel ? (
-                              <div className="group relative">
-                                <span className="cursor-default">Profit: {profitLabel}</span>
-                                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                                  Profit: {profitLabel}
-                                </div>
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {result.longBusinessSummary ? (
-                            <SummaryPopover content={result.longBusinessSummary} />
-                          ) : null}
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={alreadyAdded ? "secondary" : "default"}
-                            disabled={disabled}
-                            onClick={() => {
-                              if (disabled) return;
-                              const next = createRow(result.symbol.toUpperCase(), 0);
-                              setRows((prev) => [...prev, next]);
-                              setWeightInputByRowId((prev) => ({ ...prev, [next.id]: "" }));
-                            }}
-                            className="shrink-0"
-                          >
-                            <Plus className="mr-1 h-3.5 w-3.5" /> {alreadyAdded ? "Added" : "Add"}
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
+                {searchResultsContent}
               </div>
               <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
                 <span>
@@ -827,21 +1016,23 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
               </div>
               <p className="text-xs text-muted-foreground">{rows.length}/{MAX_HOLDINGS} holdings selected.</p>
 
-              <div className="space-y-2">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Save Portfolio</p>
-                <div className="flex gap-2">
-                  <Input
-                    value={savePortfolioName}
-                    onChange={(e) => setSavePortfolioName(e.target.value)}
-                    placeholder="Portfolio name"
-                    className="w-full"
-                  />
-                  <Button size="sm" onClick={savePortfolio} disabled={savePortfolioBusy}>
-                    {savePortfolioBusy ? "Saving..." : "Save"}
-                  </Button>
+              {showSavePortfolio ? (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Save Portfolio</p>
+                  <div className="flex gap-2">
+                    <Input
+                      value={savePortfolioName}
+                      onChange={(e) => setSavePortfolioName(e.target.value)}
+                      placeholder="Portfolio name"
+                      className="w-full"
+                    />
+                    <Button size="sm" onClick={savePortfolio} disabled={savePortfolioBusy}>
+                      {savePortfolioBusy ? "Saving..." : "Save"}
+                    </Button>
+                  </div>
+                  {savePortfolioMessage ? <p className="text-xs text-muted-foreground">{savePortfolioMessage}</p> : null}
                 </div>
-                {savePortfolioMessage ? <p className="text-xs text-muted-foreground">{savePortfolioMessage}</p> : null}
-              </div>
+              ) : null}
 
               <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border p-2">
                 {rows.length === 0 ? (
@@ -894,6 +1085,80 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                 )}
               </div>
 
+              {isWorkspace && showContributionPanel ? (
+                <div className="grid gap-2 rounded-xl border border-border p-3 text-[11px] text-muted-foreground md:grid-cols-4">
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Start Amount</p>
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      value={startValueInputValue}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(/[^0-9]/g, "");
+                        if (!raw) {
+                          setStartValueInputValue("");
+                          return;
+                        }
+                        setStartValueInputValue(Number(raw).toLocaleString());
+                      }}
+                      placeholder="0"
+                      className="h-8"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Contribution</p>
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      value={contributionAmountInputValue}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(/[^0-9]/g, "");
+                        if (!raw) {
+                          setContributionAmountInputValue("");
+                          return;
+                        }
+                        setContributionAmountInputValue(Number(raw).toLocaleString());
+                      }}
+                      placeholder="0"
+                      className="h-8"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Frequency</p>
+                    <Select value={contributionFrequencyValue} onValueChange={(value) => setContributionFrequencyValue(value as "weekly" | "monthly" | "yearly")}>
+                      <SelectTrigger className="h-8">
+                        <SelectValue placeholder="Monthly" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="weekly">Weekly</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="yearly">Yearly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Rebalancing</p>
+                      <InfoPopover content="Rebalancing keeps your target weights on schedule by trimming winners and topping up laggards. With no rebalancing, existing holdings are left alone and new contributions follow the target ratios." />
+                    </div>
+                    <Select
+                      value={rebalanceFrequencyValue}
+                      onValueChange={(value) => setRebalanceFrequencyValue(value as RebalanceFrequencyOption)}
+                    >
+                      <SelectTrigger className="h-8">
+                        <SelectValue placeholder="No rebalancing" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No rebalancing</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="quarterly">Quarterly</SelectItem>
+                        <SelectItem value="yearly">Yearly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="flex flex-wrap gap-2">
                 <Button variant="secondary" onClick={normalizeWeights}>Normalize</Button>
               </div>
@@ -905,6 +1170,7 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
             </Card>
           </div>
 
+          {!isWorkspace ? (
           <Card className="space-y-3">
             <div>
               <h3 className="text-sm font-semibold">Starting Amount & Contributions</h3>
@@ -916,14 +1182,14 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                 <Input
                   type="text"
                   inputMode="numeric"
-                  value={startValueInput}
+                  value={startValueInputValue}
                   onChange={(e) => {
                     const raw = e.target.value.replace(/[^0-9]/g, "");
                     if (!raw) {
-                      setStartValueInput("");
+                      setStartValueInputValue("");
                       return;
                     }
-                    setStartValueInput(Number(raw).toLocaleString());
+                    setStartValueInputValue(Number(raw).toLocaleString());
                   }}
                   placeholder="0"
                 />
@@ -933,21 +1199,21 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
                 <Input
                   type="text"
                   inputMode="numeric"
-                  value={contributionAmountInput}
+                  value={contributionAmountInputValue}
                   onChange={(e) => {
                     const raw = e.target.value.replace(/[^0-9]/g, "");
                     if (!raw) {
-                      setContributionAmountInput("");
+                      setContributionAmountInputValue("");
                       return;
                     }
-                    setContributionAmountInput(Number(raw).toLocaleString());
+                    setContributionAmountInputValue(Number(raw).toLocaleString());
                   }}
                   placeholder="0"
                 />
               </div>
               <div className="space-y-1">
                 <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Frequency</p>
-                <Select value={contributionFrequency} onValueChange={(value) => setContributionFrequency(value as "weekly" | "monthly" | "yearly")}>
+                <Select value={contributionFrequencyValue} onValueChange={(value) => setContributionFrequencyValue(value as "weekly" | "monthly" | "yearly")}>
                   <SelectTrigger>
                     <SelectValue placeholder="Monthly" />
                   </SelectTrigger>
@@ -961,16 +1227,11 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
                   <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Rebalancing</p>
-                  <div className="group relative">
-                    <Info className="h-3.5 w-3.5 text-muted-foreground" />
-                    <div className="pointer-events-none absolute right-0 top-5 z-20 hidden w-56 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                      Rebalancing keeps target weights by selling winners and buying laggards on a schedule.
-                    </div>
-                  </div>
+                  <InfoPopover content="Rebalancing keeps your target weights on schedule by trimming winners and topping up laggards. With no rebalancing, existing holdings are left alone and new contributions follow the target ratios." />
                 </div>
                 <Select
-                  value={rebalanceFrequency}
-                  onValueChange={(value) => setRebalanceFrequency(value as RebalanceFrequencyOption)}
+                  value={rebalanceFrequencyValue}
+                  onValueChange={(value) => setRebalanceFrequencyValue(value as RebalanceFrequencyOption)}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Monthly" />
@@ -985,7 +1246,52 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
               </div>
             </div>
           </Card>
+          ) : null}
 
+          {onCommit ? (
+            <Button
+              size="lg"
+              variant="secondary"
+              id={commitButtonId}
+              className={`w-full ${hideCommitButton ? "sr-only" : ""}`}
+              onClick={() => {
+                setError(null);
+                const activeRows = rows.filter((row) => row.weight > 0 || row.symbol.trim().length > 0);
+                if (!activeRows.length) {
+                  setError("Add at least one valid ticker.");
+                  return;
+                }
+                if (activeRows.length > MAX_HOLDINGS) {
+                  setError(`Portfolio can contain at most ${MAX_HOLDINGS} holdings.`);
+                  return;
+                }
+                if (Math.abs(totalWeight - 100) > 0.01) {
+                  setError("Total portfolio weight must equal 100%.");
+                  return;
+                }
+                if (!Number.isFinite(startValue) || startValue <= 0) {
+                  setError("Starting amount must be greater than zero.");
+                  return;
+                }
+                if (!Number.isFinite(contributionAmount) || contributionAmount < 0) {
+                  setError("Contribution amount must be zero or greater.");
+                  return;
+                }
+                onCommit({
+                  name: (initialName ?? savePortfolioName ?? "Untitled").trim() || "Untitled",
+                  holdings: activeRows.map((row) => ({ symbol: row.symbol.toUpperCase(), weight: row.weight })),
+                  startValue,
+                  contributionAmount,
+                  contributionFrequency: contributionFrequencyValue,
+                  rebalanceFrequency: rebalanceFrequencyValue
+                });
+              }}
+            >
+              {commitLabel}
+            </Button>
+          ) : null}
+
+          {showRunAnalysis ? (
           <Button
             size="lg"
             className="w-full gap-2"
@@ -1052,6 +1358,7 @@ export function BuildPortfolioClient({ mode = "page" }: { mode?: BuildPortfolioM
           >
             <Sparkles className="h-4 w-4" /> {saving ? "Validating..." : "Run Analysis"}
           </Button>
+          ) : null}
         </>
       ) : null}
     </div>
