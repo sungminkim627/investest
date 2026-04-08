@@ -210,7 +210,6 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editingBenchmark, setEditingBenchmark] = useState(false);
-  const [showGuestWelcome, setShowGuestWelcome] = useState(false);
 
   const handleSignIn = useCallback(async () => {
     await signInWithGoogleIdToken();
@@ -564,13 +563,6 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     void prefetchSearchCache();
   }, [isHydrated]);
 
-  useEffect(() => {
-    if (!isHydrated || isLoggedIn) return;
-    const seen = window.localStorage.getItem("investest:coachmark:welcome");
-    if (!seen) {
-      setShowGuestWelcome(true);
-    }
-  }, [isHydrated, isLoggedIn]);
 
   const handleCommit = async (payload: {
     name: string;
@@ -791,8 +783,6 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     }
     return rows.sort((a, b) => (higherIsBetter ? b.rawValue - a.rawValue : a.rawValue - b.rawValue));
   };
-
-  const guestItem = useMemo(() => items.find((item) => item.isGuest), [items]);
 
   return (
     <div className="space-y-6">
@@ -1246,41 +1236,6 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
                       </Select>
                     </div>
                   </div>
-                </div>
-              </div>
-            </div>,
-            document.body
-          )
-        : null}
-      {!isLoggedIn && showGuestWelcome
-        ? createPortal(
-            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/40 p-4">
-              <div className="w-full max-w-sm rounded-2xl border border-border bg-white p-5 shadow-xl">
-                <p className="text-base font-semibold">Start by editing My Portfolio</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Click the pencil icon to customize holdings, then save to see performance.
-                </p>
-                <div className="mt-4 flex items-center justify-end gap-2">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => {
-                      window.localStorage.setItem("investest:coachmark:welcome", "1");
-                      setShowGuestWelcome(false);
-                    }}
-                  >
-                    Not now
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      window.localStorage.setItem("investest:coachmark:welcome", "1");
-                      setShowGuestWelcome(false);
-                      if (guestItem) openEditor(guestItem);
-                    }}
-                  >
-                    Edit portfolio
-                  </Button>
                 </div>
               </div>
             </div>,
