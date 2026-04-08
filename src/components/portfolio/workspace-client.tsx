@@ -1032,9 +1032,14 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
                   </div>
                 </div>
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <Button size="sm" onClick={handleSignIn}>
-                    Sign in to unlock 3 more portfolios
-                  </Button>
+                  <div className="flex flex-col items-center gap-2 text-center">
+                    <Button size="sm" onClick={handleSignIn}>
+                      Log in
+                    </Button>
+                    <p className="text-[11px] text-muted-foreground">
+                      to unlock more portfolios and save them
+                    </p>
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -1287,13 +1292,20 @@ const EditPortfolioModal = memo(function EditPortfolioModal({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <p className="text-lg font-semibold">Edit Portfolio</p>
-            <Input
-              ref={nameRef}
-              defaultValue={defaultName}
-              placeholder="Portfolio name"
-              className="h-9 w-56"
-              disabled={item.isGuest}
-            />
+            <div className="group relative">
+              <Input
+                ref={nameRef}
+                defaultValue={defaultName}
+                placeholder="Portfolio name"
+                className="h-9 w-56 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                disabled={item.isGuest}
+              />
+              {item.isGuest ? (
+                <div className="pointer-events-none absolute left-0 top-10 z-30 hidden w-56 rounded-lg border border-border bg-white p-2 text-[11px] text-muted-foreground shadow-soft group-hover:block">
+                  Log in to customize and save portfolios.
+                </div>
+              ) : null}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <Button
