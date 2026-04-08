@@ -3,14 +3,15 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Edit3, Eye, EyeOff, Info, Plus, Trash2, X } from "lucide-react";
-import { BuildPortfolioClient } from "@/components/portfolio/build-portfolio-client";
+import { BuildPortfolioClient, prefetchSearchCache } from "@/components/portfolio/build-portfolio-client";
 import { PerformanceChartMulti, type SeriesEntry } from "@/components/portfolio/performance-chart-multi";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { AnalyzeResponse, HoldingInput, TimeRange } from "@/types";
+import { AnalyzeResponse, BenchmarkResponse, HoldingInput, TimeRange } from "@/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { signInWithGoogleIdToken } from "@/lib/auth/google";
 import { ResponsiveContainer as RechartsResponsiveContainer } from "recharts";
 
 const BENCHMARKS = ["SPY", "QQQ", "VTI", "AGG"] as const;
@@ -48,7 +49,7 @@ function HoldingsPopover({ label, hasHoldings }: { label: string; hasHoldings: b
       {open && pos
         ? createPortal(
             <div
-              className="pointer-events-none fixed z-50 w-64 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
+              className="pointer-events-none fixed z-[120] w-64 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
               style={{ top: pos.top, left: pos.left }}
             >
               {label}
@@ -94,7 +95,7 @@ function InfoPopover({
       {open && pos
         ? createPortal(
             <div
-              className="pointer-events-none fixed z-50 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
+              className="pointer-events-none fixed z-[120] rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
               style={{ top: pos.top, left: pos.left, width }}
             >
               {content}
@@ -185,9 +186,12 @@ function loadGuestPortfolio(): PortfolioItem {
 export function WorkspaceClient({ initialItems, userId }: Props) {
   const supabase = createSupabaseBrowserClient();
   const isLoggedIn = Boolean(userId);
+  const authReloadedRef = useRef(false);
   const [items, setItems] = useState<PortfolioItem[]>(initialItems);
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set(initialItems.map((item) => item.id)));
   const [analysisById, setAnalysisById] = useState<Record<string, AnalyzeResponse>>({});
+  const [benchmarkData, setBenchmarkData] = useState<BenchmarkResponse | null>(null);
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false);
   const [dirtyById, setDirtyById] = useState<Record<string, boolean>>({});
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
   const [isHydrated, setIsHydrated] = useState(false);
@@ -207,6 +211,10 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editingBenchmark, setEditingBenchmark] = useState(false);
   const [showGuestWelcome, setShowGuestWelcome] = useState(false);
+
+  const handleSignIn = useCallback(async () => {
+    await signInWithGoogleIdToken();
+  }, []);
 
   const applyColors = (itemsToColor: PortfolioItem[]) => {
     if (typeof window === "undefined") return itemsToColor;
@@ -236,6 +244,21 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     window.localStorage.setItem("investest:portfolioColors", JSON.stringify(map));
     return updated;
   };
+
+  useEffect(() => {
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (authReloadedRef.current) return;
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT") {
+        authReloadedRef.current = true;
+        window.location.reload();
+      }
+    });
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
 
   useEffect(() => {
     if (isLoggedIn) return;
@@ -346,24 +369,9 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     openEditor(newItem);
   };
 
-  const [analysisMetaById, setAnalysisMetaById] = useState<Record<string, { timeRange: TimeRange; benchmarkSymbol: string }>>({});
+  const [analysisMetaById, setAnalysisMetaById] = useState<Record<string, { timeRange: TimeRange }>>({});
 
-  type BenchmarkContext = {
-    symbol: (typeof BENCHMARKS)[number];
-    startValue: string;
-    contributionAmount: string;
-    contributionFrequency: "weekly" | "monthly" | "yearly";
-    rebalanceFrequency: RebalanceFrequencyOption;
-  };
-
-  const buildAnalysisCacheKey = useCallback((item: PortfolioItem, ctx?: BenchmarkContext) => {
-    const benchmarkCtx: BenchmarkContext = ctx ?? {
-      symbol: benchmarkSymbol,
-      startValue: benchmarkStartValue,
-      contributionAmount: benchmarkContributionAmount,
-      contributionFrequency: benchmarkContributionFrequency,
-      rebalanceFrequency: benchmarkRebalanceFrequency
-    };
+  const buildAnalysisCacheKey = useCallback((item: PortfolioItem) => {
     const holdingsKey = [...item.holdings]
       .map((h) => ({ symbol: h.symbol.toUpperCase(), weight: Number(h.weight) }))
       .sort((a, b) => a.symbol.localeCompare(b.symbol))
@@ -372,11 +380,6 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     return [
       "analysis",
       item.id,
-      benchmarkCtx.symbol,
-      benchmarkCtx.startValue,
-      benchmarkCtx.contributionAmount,
-      benchmarkCtx.contributionFrequency,
-      benchmarkCtx.rebalanceFrequency,
       timeRange,
       item.start_value,
       item.contribution_amount,
@@ -385,17 +388,12 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       holdingsKey
     ].join("|");
   }, [
-    benchmarkContributionAmount,
-    benchmarkContributionFrequency,
-    benchmarkRebalanceFrequency,
-    benchmarkStartValue,
-    benchmarkSymbol,
     timeRange
   ]);
 
-  const getCachedAnalysis = useCallback((item: PortfolioItem, ctx?: BenchmarkContext) => {
+  const getCachedAnalysis = useCallback((item: PortfolioItem) => {
     if (typeof window === "undefined") return null;
-    const key = buildAnalysisCacheKey(item, ctx);
+    const key = buildAnalysisCacheKey(item);
     const raw = window.localStorage.getItem(`investest:${key}`);
     if (!raw) return null;
     try {
@@ -409,31 +407,23 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     }
   }, [buildAnalysisCacheKey]);
 
-  const setCachedAnalysis = useCallback((item: PortfolioItem, payload: AnalyzeResponse, ctx?: BenchmarkContext) => {
+  const setCachedAnalysis = useCallback((item: PortfolioItem, payload: AnalyzeResponse) => {
     if (typeof window === "undefined") return;
-    const key = buildAnalysisCacheKey(item, ctx);
+    const key = buildAnalysisCacheKey(item);
     window.localStorage.setItem(`investest:${key}`, JSON.stringify({ ts: Date.now(), payload }));
   }, [buildAnalysisCacheKey]);
 
-  const runAnalysisFor = useCallback(async (toRun: PortfolioItem[], ctx?: BenchmarkContext) => {
+  const runAnalysisFor = useCallback(async (toRun: PortfolioItem[]) => {
     if (!toRun.length) return;
-
-    const benchmarkCtx: BenchmarkContext = ctx ?? {
-      symbol: benchmarkSymbol,
-      startValue: benchmarkStartValue,
-      contributionAmount: benchmarkContributionAmount,
-      contributionFrequency: benchmarkContributionFrequency,
-      rebalanceFrequency: benchmarkRebalanceFrequency
-    };
 
     window.localStorage.setItem("investest:timeRange", timeRange);
 
     await Promise.all(
       toRun.map(async (item) => {
-        const cached = getCachedAnalysis(item, benchmarkCtx);
+        const cached = getCachedAnalysis(item);
         if (cached) {
           setAnalysisById((prev) => ({ ...prev, [item.id]: cached }));
-          setAnalysisMetaById((prev) => ({ ...prev, [item.id]: { timeRange, benchmarkSymbol } }));
+          setAnalysisMetaById((prev) => ({ ...prev, [item.id]: { timeRange } }));
           setDirtyById((prev) => ({ ...prev, [item.id]: false }));
           return;
         }
@@ -444,16 +434,11 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               holdings: item.holdings,
-              benchmarkSymbol: benchmarkCtx.symbol,
               timeRange,
               startValue: item.start_value,
               contributionAmount: item.contribution_amount,
               contributionFrequency: item.contribution_frequency,
-              rebalanceFrequency: item.rebalance_frequency,
-              benchmarkStartValue: Number(benchmarkCtx.startValue.replace(/,/g, "")) || 10000,
-              benchmarkContributionAmount: Number(benchmarkCtx.contributionAmount.replace(/,/g, "")) || 0,
-              benchmarkContributionFrequency: benchmarkCtx.contributionFrequency,
-              benchmarkRebalanceFrequency: benchmarkCtx.rebalanceFrequency
+              rebalanceFrequency: item.rebalance_frequency
             })
           });
           if (!response.ok) {
@@ -462,9 +447,9 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
           }
           const payload = (await response.json()) as AnalyzeResponse;
           setAnalysisById((prev) => ({ ...prev, [item.id]: payload }));
-          setAnalysisMetaById((prev) => ({ ...prev, [item.id]: { timeRange, benchmarkSymbol } }));
+          setAnalysisMetaById((prev) => ({ ...prev, [item.id]: { timeRange } }));
           setDirtyById((prev) => ({ ...prev, [item.id]: false }));
-          setCachedAnalysis(item, payload, benchmarkCtx);
+          setCachedAnalysis(item, payload);
         } catch (error) {
           console.error(error);
         } finally {
@@ -477,11 +462,6 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       })
     );
   }, [
-    benchmarkContributionAmount,
-    benchmarkContributionFrequency,
-    benchmarkRebalanceFrequency,
-    benchmarkStartValue,
-    benchmarkSymbol,
     getCachedAnalysis,
     setCachedAnalysis,
     timeRange
@@ -492,7 +472,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       if (!item.holdings.length) return false;
       const meta = analysisMetaById[item.id];
       if (!meta) return true;
-      if (meta.timeRange !== timeRange || meta.benchmarkSymbol !== benchmarkSymbol) return true;
+      if (meta.timeRange !== timeRange) return true;
       return dirtyById[item.id] || !analysisById[item.id];
     });
     await runAnalysisFor(toRun);
@@ -504,23 +484,85 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       if (!item.holdings.length) return false;
       const meta = analysisMetaById[item.id];
       if (!meta) return true;
-      return meta.timeRange !== timeRange || meta.benchmarkSymbol !== benchmarkSymbol;
+      return meta.timeRange !== timeRange;
     });
     if (toRun.length) {
       void runAnalysisFor(toRun);
     }
   }, [
     analysisMetaById,
-    benchmarkSymbol,
-    benchmarkStartValue,
-    benchmarkContributionAmount,
-    benchmarkContributionFrequency,
-    benchmarkRebalanceFrequency,
     isHydrated,
     runAnalysisFor,
     timeRange,
     visibleItems
   ]);
+
+  const runBenchmarkAnalysis = useCallback(async (override?: {
+    symbol: (typeof BENCHMARKS)[number];
+    startValue: string;
+    contributionAmount: string;
+    contributionFrequency: "weekly" | "monthly" | "yearly";
+    rebalanceFrequency: RebalanceFrequencyOption;
+  }) => {
+    setBenchmarkLoading(true);
+    const ctx = override ?? {
+      symbol: benchmarkSymbol,
+      startValue: benchmarkStartValue,
+      contributionAmount: benchmarkContributionAmount,
+      contributionFrequency: benchmarkContributionFrequency,
+      rebalanceFrequency: benchmarkRebalanceFrequency
+    };
+    try {
+      const response = await fetch("/api/benchmark", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          benchmarkSymbol: ctx.symbol,
+          timeRange,
+          startValue: Number(ctx.startValue.replace(/,/g, "")) || 10000,
+          contributionAmount: Number(ctx.contributionAmount.replace(/,/g, "")) || 0,
+          contributionFrequency: ctx.contributionFrequency,
+          rebalanceFrequency: ctx.rebalanceFrequency
+        })
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: "Benchmark request failed" }));
+        throw new Error(err.error ?? "Benchmark request failed");
+      }
+      const payload = (await response.json()) as BenchmarkResponse;
+      setBenchmarkData(payload);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setBenchmarkLoading(false);
+    }
+  }, [
+    benchmarkContributionAmount,
+    benchmarkContributionFrequency,
+    benchmarkRebalanceFrequency,
+    benchmarkStartValue,
+    benchmarkSymbol,
+    timeRange
+  ]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    void runBenchmarkAnalysis();
+  }, [
+    benchmarkContributionAmount,
+    benchmarkContributionFrequency,
+    benchmarkRebalanceFrequency,
+    benchmarkStartValue,
+    benchmarkSymbol,
+    isHydrated,
+    runBenchmarkAnalysis,
+    timeRange
+  ]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    void prefetchSearchCache();
+  }, [isHydrated]);
 
   useEffect(() => {
     if (!isHydrated || isLoggedIn) return;
@@ -725,11 +767,10 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
   }, [activeItems, analysisById]);
 
   const activeCount = activeItems.length;
-  const benchmarkSource = activeItems.find((item) => analysisById[item.id]);
-  const benchmarkSeries = benchmarkVisible && benchmarkSource ? analysisById[benchmarkSource.id]?.benchmarkSeries ?? [] : [];
-  const benchmarkProjection = benchmarkVisible && benchmarkSource ? analysisById[benchmarkSource.id]?.benchmarkProjection ?? [] : [];
-  const benchmarkMetrics = benchmarkVisible && benchmarkSource ? analysisById[benchmarkSource.id]?.benchmarkMetrics ?? null : null;
-  const benchmarkRisk = benchmarkVisible && benchmarkSource ? analysisById[benchmarkSource.id]?.benchmarkRiskScore ?? null : null;
+  const benchmarkSeries = benchmarkVisible ? benchmarkData?.benchmarkSeries ?? [] : [];
+  const benchmarkProjection = benchmarkVisible ? benchmarkData?.benchmarkProjection ?? [] : [];
+  const benchmarkMetrics = benchmarkVisible ? benchmarkData?.metrics ?? null : null;
+  const benchmarkRisk = benchmarkVisible ? benchmarkData?.riskScore ?? null : null;
 
   const buildRanking = (
     selector: (data: AnalyzeResponse) => number | null | undefined,
@@ -777,11 +818,11 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
               </div>
             </div>
             <div className="flex-1 min-h-0">
-              {chartSeries.length ? (
+              {chartSeries.length || (benchmarkVisible && benchmarkSeries.length) ? (
                 <PerformanceChartMulti series={chartSeries} benchmark={benchmarkSeries} benchmarkProjection={benchmarkProjection} showProjection />
               ) : (
                 <div className="flex h-full items-center justify-center">
-                  <p className="text-sm text-muted-foreground">Run analysis to see performance.</p>
+                  <p className="text-sm text-muted-foreground">{benchmarkLoading ? "Loading benchmark..." : "Run analysis to see performance."}</p>
                 </div>
               )}
             </div>
@@ -921,37 +962,39 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
                       >
                         <Edit3 className="h-3.5 w-3.5" />
                       </button>
-                      <div className="relative">
-                        <button
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
-                          onClick={() => setConfirmDeleteId((prev) => (prev === item.id ? null : item.id))}
-                          aria-label="Delete portfolio"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                        {confirmDeleteId === item.id ? (
-                          <div className="absolute right-0 top-10 z-20 w-40 rounded-lg border border-border bg-white p-2 text-xs shadow-soft">
-                            <p className="text-[11px] text-muted-foreground">Delete this portfolio?</p>
-                            <div className="mt-2 flex items-center justify-end gap-2">
-                              <button
-                                className="text-[11px] text-muted-foreground"
-                                onClick={() => setConfirmDeleteId(null)}
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                className="rounded bg-red-600 px-2 py-1 text-[11px] font-semibold text-white"
-                                onClick={() => {
-                                  setConfirmDeleteId(null);
-                                  handleDelete(item);
-                                }}
-                              >
-                                Delete
-                              </button>
+                      {!item.isGuest ? (
+                        <div className="relative">
+                          <button
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
+                            onClick={() => setConfirmDeleteId((prev) => (prev === item.id ? null : item.id))}
+                            aria-label="Delete portfolio"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                          {confirmDeleteId === item.id ? (
+                            <div className="absolute right-0 top-10 z-20 w-40 rounded-lg border border-border bg-white p-2 text-xs shadow-soft">
+                              <p className="text-[11px] text-muted-foreground">Delete this portfolio?</p>
+                              <div className="mt-2 flex items-center justify-end gap-2">
+                                <button
+                                  className="text-[11px] text-muted-foreground"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  className="rounded bg-red-600 px-2 py-1 text-[11px] font-semibold text-white"
+                                  onClick={() => {
+                                    setConfirmDeleteId(null);
+                                    handleDelete(item);
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
                             </div>
-                          </div>
-                        ) : null}
-                      </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                   <div className="mt-1 text-[10px] text-muted-foreground truncate">
@@ -999,12 +1042,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
                   </div>
                 </div>
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      window.location.href = `/auth/signin`;
-                    }}
-                  >
+                  <Button size="sm" onClick={handleSignIn}>
                     Sign in to unlock 3 more portfolios
                   </Button>
                 </div>
@@ -1105,7 +1143,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
                         window.localStorage.setItem("investest:benchmarkContributionFrequency", nextCtx.contributionFrequency);
                         window.localStorage.setItem("investest:benchmarkRebalanceFrequency", nextCtx.rebalanceFrequency);
                         window.localStorage.setItem("investest:benchmarkVisible", String(benchmarkVisible));
-                        await runAnalysisFor(visibleItems, nextCtx);
+                        await runBenchmarkAnalysis(nextCtx);
                         setEditingBenchmark(false);
                       }}
                     >
@@ -1294,7 +1332,13 @@ const EditPortfolioModal = memo(function EditPortfolioModal({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <p className="text-lg font-semibold">Edit Portfolio</p>
-            <Input ref={nameRef} defaultValue={defaultName} placeholder="Portfolio name" className="h-9 w-56" />
+            <Input
+              ref={nameRef}
+              defaultValue={defaultName}
+              placeholder="Portfolio name"
+              className="h-9 w-56"
+              disabled={item.isGuest}
+            />
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -1395,7 +1439,7 @@ const EditPortfolioModal = memo(function EditPortfolioModal({
         item={item}
         commitButtonId={commitButtonId}
         onCommit={(payload) => {
-          const nameValue = nameRef.current?.value?.trim() || "Untitled";
+          const nameValue = item.isGuest ? defaultName : nameRef.current?.value?.trim() || "Untitled";
           onCommit({ ...payload, name: nameValue });
         }}
         externalInputs={{

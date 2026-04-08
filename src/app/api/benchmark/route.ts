@@ -2,24 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { startOfWeek, addWeeks, parseISO } from "date-fns";
 import { z } from "zod";
 import {
-  buildNoRebalanceSeries,
   buildProjectionSeriesFromAssets,
   computeMetrics,
   computeRiskScore,
   getDateRangeForTimeRange,
   getProjectionMonthsFromSeries,
-  scaleSeriesToEndValue
+  scaleSeriesToEndValue,
+  singleAssetSeries
 } from "@/lib/portfolio/engine";
 import { getOrFetchPricesForSymbols } from "@/lib/portfolio/cache";
-import { AnalyzeResponse, HoldingInput, TimeRange } from "@/types";
+import { BenchmarkResponse, TimeRange } from "@/types";
 
 const bodySchema = z.object({
-  holdings: z.array(
-    z.object({
-      symbol: z.string().min(1),
-      weight: z.number().positive()
-    })
-  ).max(10, "Portfolio can contain at most 10 holdings."),
+  benchmarkSymbol: z.enum(["SPY", "QQQ", "VTI", "AGG"]),
   timeRange: z.enum(["1Y", "3Y", "5Y", "10Y"]),
   startValue: z.number().positive().optional(),
   contributionAmount: z.number().min(0).optional(),
@@ -27,12 +22,10 @@ const bodySchema = z.object({
   rebalanceFrequency: z.enum(["none", "monthly", "quarterly", "yearly"]).optional()
 });
 
-async function loadAllPrices(holdings: HoldingInput[], timeRange: TimeRange) {
+async function loadBenchmarkPrices(symbol: string, timeRange: TimeRange) {
   const { startDate, endDate } = getDateRangeForTimeRange(timeRange);
-  const symbols = [...new Set(holdings.map((h) => h.symbol.toUpperCase()))];
-  console.info(`[analyze] symbols=${symbols.join(",")} range=${timeRange} (${startDate}..${endDate})`);
-
-  return getOrFetchPricesForSymbols(symbols, startDate, endDate);
+  console.info(`[benchmark] symbol=${symbol} range=${timeRange} (${startDate}..${endDate})`);
+  return getOrFetchPricesForSymbols([symbol], startDate, endDate);
 }
 
 export async function POST(request: NextRequest) {
@@ -41,50 +34,46 @@ export async function POST(request: NextRequest) {
     const parsed = bodySchema.safeParse(rawBody);
     if (!parsed.success) {
       return NextResponse.json(
-        { error: "Invalid analyze payload", details: parsed.error.flatten() },
+        { error: "Invalid benchmark payload", details: parsed.error.flatten() },
         { status: 400 }
       );
     }
+
     const body = parsed.data;
-    const normalizedHoldings = body.holdings.map((h) => ({ ...h, symbol: h.symbol.toUpperCase() }));
-    const allPrices = await loadAllPrices(normalizedHoldings, body.timeRange);
-
+    const symbol = body.benchmarkSymbol.toUpperCase();
+    const allPrices = await loadBenchmarkPrices(symbol, body.timeRange);
     const startValue = body.startValue ?? 10000;
-    const rawPortfolioSeries = buildNoRebalanceSeries(
-      normalizedHoldings,
-      allPrices,
-      1
-    );
-    const portfolioSeries = scaleSeriesToEndValue(rawPortfolioSeries, startValue);
 
-    const metrics = computeMetrics(portfolioSeries);
-
-    const projectionMonths = getProjectionMonthsFromSeries(portfolioSeries);
+    const rawSeries = singleAssetSeries(symbol, allPrices, 1);
+    const benchmarkSeries = scaleSeriesToEndValue(rawSeries, startValue);
+    const metrics = computeMetrics(benchmarkSeries);
+    const projectionMonths = getProjectionMonthsFromSeries(benchmarkSeries);
     const projectionStartDate = (() => {
-      const pLast = portfolioSeries[portfolioSeries.length - 1]?.date;
-      if (!pLast) return undefined;
-      const latestDate = parseISO(pLast);
+      const last = benchmarkSeries[benchmarkSeries.length - 1]?.date;
+      if (!last) return undefined;
+      const latestDate = parseISO(last);
       const weekStart = startOfWeek(latestDate, { weekStartsOn: 1 });
       const aligned = weekStart <= latestDate ? addWeeks(weekStart, 1) : weekStart;
       return aligned.toISOString().slice(0, 10);
     })();
-    const portfolioProjection = portfolioSeries.length
+
+    const benchmarkProjection = benchmarkSeries.length
       ? buildProjectionSeriesFromAssets({
-          holdings: normalizedHoldings,
+          holdings: [{ symbol, weight: 100 }],
           prices: allPrices,
-          lastActualDate: portfolioSeries[portfolioSeries.length - 1].date,
-          lastActualValue: portfolioSeries[portfolioSeries.length - 1].value,
+          lastActualDate: benchmarkSeries[benchmarkSeries.length - 1].date,
+          lastActualValue: benchmarkSeries[benchmarkSeries.length - 1].value,
           projectionStartDate,
           projectionMonths,
           contributionAmount: body.contributionAmount ?? 0,
           contributionFrequency: body.contributionFrequency ?? "monthly",
-          rebalanceFrequency: body.rebalanceFrequency ?? "monthly"
+          rebalanceFrequency: body.rebalanceFrequency ?? "none"
         })
       : [];
 
-    const response: AnalyzeResponse = {
-      portfolioSeries,
-      portfolioProjection,
+    const response: BenchmarkResponse = {
+      benchmarkSeries,
+      benchmarkProjection,
       metrics,
       riskScore: computeRiskScore(metrics)
     };
@@ -96,9 +85,6 @@ export async function POST(request: NextRequest) {
       process.env.NODE_ENV === "development" && error instanceof Error && error.stack
         ? error.stack
         : undefined;
-    return NextResponse.json(
-      { error: message, details },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: message, details }, { status: 500 });
   }
 }

@@ -87,6 +87,39 @@ function parseTemplate(value: string): HoldingInput[] {
 type BuildRow = HoldingInput & { id: string };
 type BuildPortfolioMode = "page" | "workspace";
 type RebalanceFrequencyOption = "none" | "monthly" | "quarterly" | "yearly";
+type SearchCache = Record<string, { results: SearchResult[]; total: number | null }>;
+
+const sharedSearchCache: SearchCache = {};
+
+function getSharedCacheEntry(key: string) {
+  return sharedSearchCache[key];
+}
+
+function setSharedCacheEntry(key: string, value: { results: SearchResult[]; total: number | null }) {
+  sharedSearchCache[key] = value;
+}
+
+export async function prefetchSearchCache() {
+  if (typeof window === "undefined") return;
+  const prime = async (assetType: "STOCK" | "ETF") => {
+    const params = new URLSearchParams({ query: "", limit: "100", offset: "0", assetType });
+    const cacheKey = params.toString();
+    if (getSharedCacheEntry(cacheKey)) return;
+    try {
+      const res = await fetch(`/api/search?${cacheKey}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as { results?: SearchResult[]; total?: number };
+      setSharedCacheEntry(cacheKey, {
+        results: data.results ?? [],
+        total: typeof data.total === "number" ? data.total : null
+      });
+    } catch {
+      // ignore prefetch errors
+    }
+  };
+
+  await Promise.all([prime("STOCK"), prime("ETF")]);
+}
 
 function createRow(symbol = "", weight = 0): BuildRow {
   return {
@@ -104,8 +137,8 @@ function SummaryPopover({ content }: { content: string }) {
   useEffect(() => {
     if (!open || !triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const width = 280;
-    const height = 180;
+    const width = Math.min(520, Math.max(320, Math.ceil(Math.min(content.length / 3, 520))));
+    const height = Math.min(320, Math.max(180, Math.ceil(content.length / 2)));
     const left = Math.min(rect.left, window.innerWidth - width - 12);
     const defaultTop = rect.bottom + 8;
     const top = defaultTop + height > window.innerHeight ? Math.max(12, rect.top - height - 8) : defaultTop;
@@ -128,8 +161,14 @@ function SummaryPopover({ content }: { content: string }) {
       {open && pos
         ? createPortal(
             <div
-              className="pointer-events-none fixed z-50 w-72 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
-              style={{ top: pos.top, left: pos.left, maxHeight: 200, overflow: "hidden" }}
+              className="pointer-events-none fixed z-[120] rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
+              style={{
+                top: pos.top,
+                left: pos.left,
+                width: Math.min(520, Math.max(320, Math.ceil(Math.min(content.length / 3, 520)))),
+                maxHeight: 320,
+                overflow: "auto"
+              }}
             >
               {content}
             </div>,
@@ -166,7 +205,7 @@ function InfoPopover({ content }: { content: string }) {
       {open && pos
         ? createPortal(
             <div
-              className="pointer-events-none fixed z-50 w-64 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
+              className="pointer-events-none fixed z-[120] w-64 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
               style={{ top: pos.top, left: pos.left }}
             >
               {content}
@@ -175,6 +214,51 @@ function InfoPopover({ content }: { content: string }) {
           )
         : null}
     </>
+  );
+}
+
+function HoverPopover({
+  label,
+  content,
+  width = 180
+}: {
+  label: React.ReactNode;
+  content: string;
+  width?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const left = Math.min(rect.left, window.innerWidth - width - 12);
+    const top = rect.bottom + 8;
+    setPos({ top, left: Math.max(12, left) });
+  }, [open, width]);
+
+  return (
+    <span
+      className="inline-flex"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <span ref={triggerRef} className="inline-flex">
+        {label}
+      </span>
+      {open && pos
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed z-[120] rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft"
+              style={{ top: pos.top, left: pos.left, width }}
+            >
+              {content}
+            </div>,
+            document.body
+          )
+        : null}
+    </span>
   );
 }
 
@@ -307,7 +391,7 @@ export function BuildPortfolioClient({
   const [categoryOptions, setCategoryOptions] = useState<FilterOption[]>([]);
   const [filterMatchCount, setFilterMatchCount] = useState<number | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [searchCache, setSearchCache] = useState<Record<string, { results: SearchResult[]; total: number | null }>>({});
+  const [searchCache, setSearchCache] = useState<SearchCache>(() => ({ ...sharedSearchCache }));
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchPage, setSearchPage] = useState(0);
   const [hasMoreResults, setHasMoreResults] = useState(true);
@@ -442,7 +526,7 @@ export function BuildPortfolioClient({
         params.set("category", categoryFilter);
       }
       const cacheKey = params.toString();
-      const cached = searchCache[cacheKey];
+      const cached = searchCache[cacheKey] ?? getSharedCacheEntry(cacheKey);
       if (cached && !cancelled) {
         setSearchResults(cached.results);
         setTotalSearchResults(cached.total);
@@ -472,6 +556,7 @@ export function BuildPortfolioClient({
             ...prev,
             [cacheKey]: { results: incoming, total }
           }));
+          setSharedCacheEntry(cacheKey, { results: incoming, total });
           if (total !== null) {
             setHasMoreResults((searchPage + 1) * 100 < total);
           } else {
@@ -497,12 +582,16 @@ export function BuildPortfolioClient({
     const prime = async (assetType: "STOCK" | "ETF") => {
       const params = new URLSearchParams({ query: "", limit: "100", offset: "0", assetType });
       const cacheKey = params.toString();
-      if (searchCache[cacheKey]) return;
+      if (searchCache[cacheKey] || getSharedCacheEntry(cacheKey)) return;
       try {
         const res = await fetch(`/api/search?${cacheKey}`);
         if (!res.ok || cancelled) return;
         const data = (await res.json()) as { results?: SearchResult[]; total?: number };
         if (cancelled) return;
+        setSharedCacheEntry(cacheKey, {
+          results: data.results ?? [],
+          total: typeof data.total === "number" ? data.total : null
+        });
         setSearchCache((prev) => ({
           ...prev,
           [cacheKey]: {
@@ -668,37 +757,42 @@ export function BuildPortfolioClient({
           <div className="min-w-0">
             <p className="text-sm font-medium">{result.symbol} - {result.name}</p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
-              <div className="group relative">
-                <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[risk.tone]}`}>
-                  {risk.label}
-                </span>
-                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                  {result.beta !== null && result.beta !== undefined && Number.isFinite(result.beta)
-                    ? `Beta: ${result.beta.toFixed(2)}`
-                    : "Beta not available"}
-                </div>
-              </div>
-              <div className="group relative">
-                <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[growth.tone]}`}>
-                  {growth.label}
-                </span>
-                <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-44 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                  {(() => {
-                    const v1 = formatPercent(result.yearChange1Y ?? null, 1);
-                    if (v1) return `Growth: ${v1}`;
-                    return "Growth data not available";
-                  })()}
-                </div>
-              </div>
-              {sizeLabel ? (
-                <div className="group relative">
-                  <span className="cursor-default rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                    {sizeLabel}
+              <HoverPopover
+                label={
+                  <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[risk.tone]}`}>
+                    {risk.label}
                   </span>
-                  <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                    {sizeValue ? `Size: ${formatLargeCurrency(sizeValue)}` : "Size not available"}
-                  </div>
-                </div>
+                }
+                content={
+                  result.beta !== null && result.beta !== undefined && Number.isFinite(result.beta)
+                    ? `Beta: ${result.beta.toFixed(2)}`
+                    : "Beta not available"
+                }
+                width={160}
+              />
+              <HoverPopover
+                label={
+                  <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[growth.tone]}`}>
+                    {growth.label}
+                  </span>
+                }
+                content={(() => {
+                  const v1 = formatPercent(result.yearChange1Y ?? null, 1);
+                  if (v1) return `Growth: ${v1}`;
+                  return "Growth data not available";
+                })()}
+                width={176}
+              />
+              {sizeLabel ? (
+                <HoverPopover
+                  label={
+                    <span className="cursor-default rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                      {sizeLabel}
+                    </span>
+                  }
+                  content={sizeValue ? `Size: ${formatLargeCurrency(sizeValue)}` : "Size not available"}
+                  width={160}
+                />
               ) : null}
             </div>
             <p className="text-xs text-muted-foreground">
@@ -706,40 +800,40 @@ export function BuildPortfolioClient({
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600">
               {!isEtf && roePct ? (
-                <div className="group relative">
-                  <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[roeLabel.tone]}`}>
-                    Efficiency: {roeLabel.label}
-                  </span>
-                  <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                    ROE: {roePct}
-                  </div>
-                </div>
+                <HoverPopover
+                  label={
+                    <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[roeLabel.tone]}`}>
+                      Efficiency: {roeLabel.label}
+                    </span>
+                  }
+                  content={`ROE: ${roePct}`}
+                  width={160}
+                />
               ) : null}
               {!isEtf && peText ? (
-                <div className="group relative">
-                  <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[peBadge.tone]}`}>
-                    Price Tag: {peBadge.label}
-                  </span>
-                  <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                    P/E: {peText}
-                  </div>
-                </div>
+                <HoverPopover
+                  label={
+                    <span className={`cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeToneClasses[peBadge.tone]}`}>
+                      Price Tag: {peBadge.label}
+                    </span>
+                  }
+                  content={`P/E: ${peText}`}
+                  width={160}
+                />
               ) : null}
               {!isEtf && revenueLabel ? (
-                <div className="group relative">
-                  <span className="cursor-default">Rev: {revenueLabel}</span>
-                  <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                    Revenue: {revenueLabel}
-                  </div>
-                </div>
+                <HoverPopover
+                  label={<span className="cursor-default">Rev: {revenueLabel}</span>}
+                  content={`Revenue: ${revenueLabel}`}
+                  width={160}
+                />
               ) : null}
               {!isEtf && profitLabel ? (
-                <div className="group relative">
-                  <span className="cursor-default">Profit: {profitLabel}</span>
-                  <div className="pointer-events-none absolute left-0 top-6 z-20 hidden w-40 rounded-lg border border-border bg-white p-2 text-[11px] leading-snug text-muted-foreground shadow-soft group-hover:block">
-                    Profit: {profitLabel}
-                  </div>
-                </div>
+                <HoverPopover
+                  label={<span className="cursor-default">Profit: {profitLabel}</span>}
+                  content={`Profit: ${profitLabel}`}
+                  width={160}
+                />
               ) : null}
             </div>
           </div>

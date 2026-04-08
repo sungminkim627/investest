@@ -24,18 +24,14 @@ export interface PortfolioMetrics {
 
 export interface AnalyzeResponse {
   portfolioSeries: SeriesPoint[];
-  benchmarkSeries: SeriesPoint[];
   portfolioProjection: SeriesPoint[];
+  metrics: PortfolioMetrics;
+  riskScore: number;
+}
+
+export interface BenchmarkResponse {
+  benchmarkSeries: SeriesPoint[];
   benchmarkProjection: SeriesPoint[];
   metrics: PortfolioMetrics;
-  benchmarkMetrics: PortfolioMetrics;
   riskScore: number;
-  benchmarkRiskScore: number;
-  comparisonPoints: {
-    label: string;
-    portfolioValue: number;
-    benchmarkValue: number;
-    delta: number;
-  }[];
-  comparisonSummary: string;
 }

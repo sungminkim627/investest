@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { signInWithGoogleIdToken } from "@/lib/auth/google";
 
 export function AuthNavButton() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -47,12 +48,7 @@ export function AuthNavButton() {
       <Button
         size="sm"
         onClick={async () => {
-          await supabase.auth.signInWithOAuth({
-            provider: "google",
-            options: {
-              redirectTo: `${window.location.origin}/auth/callback`
-            }
-          });
+          await signInWithGoogleIdToken();
         }}
       >
         Log In
