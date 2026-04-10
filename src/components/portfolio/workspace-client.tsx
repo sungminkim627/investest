@@ -192,8 +192,10 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
   const [analysisById, setAnalysisById] = useState<Record<string, AnalyzeResponse>>({});
   const [benchmarkData, setBenchmarkData] = useState<BenchmarkResponse | null>(null);
   const [benchmarkLoading, setBenchmarkLoading] = useState(false);
+  const [benchmarkAttempted, setBenchmarkAttempted] = useState(false);
   const [dirtyById, setDirtyById] = useState<Record<string, boolean>>({});
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
+  const loadingIdsRef = useRef<Set<string>>(new Set());
   const [isHydrated, setIsHydrated] = useState(false);
   const [benchmarkSymbol, setBenchmarkSymbol] = useState<(typeof BENCHMARKS)[number]>("SPY");
   const [benchmarkStartValue, setBenchmarkStartValue] = useState("10,000");
@@ -323,6 +325,20 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
   const visibleItems = items.slice(0, maxSlots);
   const emptySlots = isLoggedIn ? Math.max(0, maxSlots - visibleItems.length) : 0;
   const activeItems = visibleItems.filter((item) => activeIds.has(item.id));
+  const expectedPortfolioIds = visibleItems.filter((item) => item.holdings.length > 0).map((item) => item.id);
+  const allAnalysesReady =
+    expectedPortfolioIds.length === 0 ||
+    expectedPortfolioIds.every((id) => !loadingIdsRef.current.has(id));
+  const isBlockingLoading = !isHydrated || !allAnalysesReady;
+  const initialLoadCompleteRef = useRef(false);
+
+  useEffect(() => {
+    if (!initialLoadCompleteRef.current && !isBlockingLoading) {
+      initialLoadCompleteRef.current = true;
+    }
+  }, [isBlockingLoading]);
+
+  const showInitialLoading = !initialLoadCompleteRef.current;
 
   const toggleActive = (id: string) => {
     setActiveIds((prev) => {
@@ -419,6 +435,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
 
     await Promise.all(
       toRun.map(async (item) => {
+        if (loadingIdsRef.current.has(item.id)) return;
         const cached = getCachedAnalysis(item);
         if (cached) {
           setAnalysisById((prev) => ({ ...prev, [item.id]: cached }));
@@ -426,7 +443,8 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
           setDirtyById((prev) => ({ ...prev, [item.id]: false }));
           return;
         }
-        setLoadingIds((prev) => new Set(prev).add(item.id));
+        loadingIdsRef.current.add(item.id);
+        setLoadingIds(new Set(loadingIdsRef.current));
         try {
           const response = await fetch("/api/analyze", {
             method: "POST",
@@ -452,11 +470,8 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
         } catch (error) {
           console.error(error);
         } finally {
-          setLoadingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(item.id);
-            return next;
-          });
+          loadingIdsRef.current.delete(item.id);
+          setLoadingIds(new Set(loadingIdsRef.current));
         }
       })
     );
@@ -472,7 +487,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       const meta = analysisMetaById[item.id];
       if (!meta) return true;
       if (meta.timeRange !== timeRange) return true;
-      return dirtyById[item.id] || !analysisById[item.id];
+      return (dirtyById[item.id] || !analysisById[item.id]) && !loadingIdsRef.current.has(item.id);
     });
     await runAnalysisFor(toRun);
   };
@@ -483,7 +498,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       if (!item.holdings.length) return false;
       const meta = analysisMetaById[item.id];
       if (!meta) return true;
-      return meta.timeRange !== timeRange;
+      return meta.timeRange !== timeRange && !loadingIdsRef.current.has(item.id);
     });
     if (toRun.length) {
       void runAnalysisFor(toRun);
@@ -533,6 +548,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     } catch (error) {
       console.error(error);
     } finally {
+      setBenchmarkAttempted(true);
       setBenchmarkLoading(false);
     }
   }, [
@@ -808,7 +824,11 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
               </div>
             </div>
             <div className="flex-1 min-h-0">
-              {chartSeries.length || (benchmarkVisible && benchmarkSeries.length) ? (
+              {showInitialLoading ? (
+                <div className="flex h-full w-full items-center justify-center rounded-2xl border border-border bg-white/80">
+                  <span className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
+                </div>
+              ) : chartSeries.length || (benchmarkVisible && benchmarkSeries.length) ? (
                 <PerformanceChartMulti series={chartSeries} benchmark={benchmarkSeries} benchmarkProjection={benchmarkProjection} showProjection />
               ) : (
                 <div className="flex h-full items-center justify-center">
@@ -842,252 +862,271 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
             </div>
           </div>
           <div className="space-y-2 overflow-y-auto pr-1">
-            <div className={`rounded-lg border p-2 ${benchmarkVisible ? "border-emerald-200 bg-emerald-50/60" : "border-border bg-slate-50 text-slate-500"}`}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="inline-flex h-3.5 w-3.5 rounded-full border border-border bg-slate-200" />
-                  <p className="text-[11px] font-semibold text-slate-900">Benchmark · {benchmarkSymbol}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
-                    onClick={() => setBenchmarkVisible((prev) => !prev)}
-                    aria-label={benchmarkVisible ? "Hide benchmark" : "Show benchmark"}
-                  >
-                    {benchmarkVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-                  </button>
-                  <button
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
-                    onClick={() => {
-                      setDraftBenchmarkSymbol(benchmarkSymbol);
-                      setDraftBenchmarkStartValue(benchmarkStartValue);
-                      setDraftBenchmarkContributionAmount(benchmarkContributionAmount);
-                      setDraftBenchmarkContributionFrequency(benchmarkContributionFrequency);
-                      setDraftBenchmarkRebalanceFrequency(benchmarkRebalanceFrequency);
-                      setEditingBenchmark(true);
-                    }}
-                    aria-label="Edit benchmark"
-                  >
-                    <Edit3 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+            {showInitialLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <div key={`portfolio-skeleton-${index}`} className="h-16 animate-pulse rounded-lg border border-border bg-white/80" />
+                ))}
               </div>
-              <div className="mt-1 text-[10px] text-muted-foreground truncate">
-                Start ${Number(benchmarkStartValue.replace(/,/g, "")) || 10000} · Contrib ${Number(benchmarkContributionAmount.replace(/,/g, "")) || 0} / {benchmarkContributionFrequency} · Rebalance {benchmarkRebalanceFrequency}
-              </div>
-            </div>
-            {visibleItems.map((item) => {
-              const active = activeIds.has(item.id);
-              const dirty = dirtyById[item.id];
-              const loading = loadingIds.has(item.id);
-              const sortedHoldings = [...item.holdings].sort((a, b) => b.weight - a.weight);
-              const holdingLabel = sortedHoldings.length
-                ? sortedHoldings.map((h) => `${h.symbol.toUpperCase()} ${h.weight.toFixed(1)}%`).join(" · ")
-                : "No holdings yet";
-              return (
-                <div
-                  key={item.id}
-                  className={`rounded-lg border p-2 transition ${
-                    active ? "border-emerald-500 bg-emerald-50" : "border-border bg-slate-50 text-slate-500"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <div className="relative">
-                          <button
-                            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-border"
-                            style={{ backgroundColor: item.color ?? PORTFOLIO_COLORS[0] }}
-                            onClick={() => setConfirmDeleteId((prev) => (prev === `color-${item.id}` ? null : `color-${item.id}`))}
-                            aria-label="Choose color"
-                          />
-                          {confirmDeleteId === `color-${item.id}` ? (
-                            <div className="absolute left-0 top-6 z-20 flex w-36 flex-wrap gap-1 rounded-lg border border-border bg-white p-2 shadow-soft">
-                              {PORTFOLIO_COLORS.map((color) => (
-                                <button
-                                  key={`${item.id}-${color}`}
-                                  type="button"
-                                  aria-label="Select color"
-                                  className={`h-5 w-5 rounded-full border ${item.color === color ? "border-slate-900" : "border-border"}`}
-                                  style={{ backgroundColor: color }}
-                                  onClick={() => {
-                                    setItems((prev) => prev.map((p) => (p.id === item.id ? { ...p, color } : p)));
-                                    const stored = window.localStorage.getItem("investest:portfolioColors");
-                                    let map: Record<string, string> = {};
-                                    try {
-                                      map = stored ? JSON.parse(stored) : {};
-                                    } catch {
-                                      map = {};
-                                    }
-                                    map[item.id] = color;
-                                    window.localStorage.setItem("investest:portfolioColors", JSON.stringify(map));
-                                    setConfirmDeleteId(null);
-                                  }}
-                                />
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                        <p className="text-[11px] font-semibold truncate">{item.name}</p>
-                      </div>
-                      <HoldingsPopover label={holdingLabel} hasHoldings={sortedHoldings.length > 0} />
-                      {!isLoggedIn && item.isGuest ? (
-                        <p className="mt-1 text-[10px] text-muted-foreground">Tip: Click the pencil to edit holdings.</p>
-                      ) : null}
+            ) : null}
+            {!showInitialLoading && (
+              <>
+                <div className={`rounded-lg border p-2 ${benchmarkVisible ? "border-emerald-200 bg-emerald-50/60" : "border-border bg-slate-50 text-slate-500"}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex h-3.5 w-3.5 rounded-full border border-border bg-slate-200" />
+                      <p className="text-[11px] font-semibold text-slate-900">Benchmark · {benchmarkSymbol}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      {dirty ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">Edited</span> : null}
-                      {loading ? <span className="text-[10px] text-muted-foreground">Updating...</span> : null}
                       <button
                         className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
-                        onClick={() => toggleActive(item.id)}
-                        aria-label={active ? "Hide portfolio" : "Show portfolio"}
+                        onClick={() => setBenchmarkVisible((prev) => !prev)}
+                        aria-label={benchmarkVisible ? "Hide benchmark" : "Show benchmark"}
                       >
-                        {active ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                        {benchmarkVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
                       </button>
                       <button
                         className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
-                        onClick={() => openEditor(item)}
-                        aria-label="Edit portfolio"
+                        onClick={() => {
+                          setDraftBenchmarkSymbol(benchmarkSymbol);
+                          setDraftBenchmarkStartValue(benchmarkStartValue);
+                          setDraftBenchmarkContributionAmount(benchmarkContributionAmount);
+                          setDraftBenchmarkContributionFrequency(benchmarkContributionFrequency);
+                          setDraftBenchmarkRebalanceFrequency(benchmarkRebalanceFrequency);
+                          setEditingBenchmark(true);
+                        }}
+                        aria-label="Edit benchmark"
                       >
                         <Edit3 className="h-3.5 w-3.5" />
                       </button>
-                      {!item.isGuest ? (
-                        <div className="relative">
-                          <button
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
-                            onClick={() => setConfirmDeleteId((prev) => (prev === item.id ? null : item.id))}
-                            aria-label="Delete portfolio"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                          {confirmDeleteId === item.id ? (
-                            <div className="absolute right-0 top-10 z-20 w-40 rounded-lg border border-border bg-white p-2 text-xs shadow-soft">
-                              <p className="text-[11px] text-muted-foreground">Delete this portfolio?</p>
-                              <div className="mt-2 flex items-center justify-end gap-2">
-                                <button
-                                  className="text-[11px] text-muted-foreground"
-                                  onClick={() => setConfirmDeleteId(null)}
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  className="rounded bg-red-600 px-2 py-1 text-[11px] font-semibold text-white"
-                                  onClick={() => {
-                                    setConfirmDeleteId(null);
-                                    handleDelete(item);
-                                  }}
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
                     </div>
                   </div>
                   <div className="mt-1 text-[10px] text-muted-foreground truncate">
-                    Start ${Math.round(item.start_value).toLocaleString()} · Contrib ${Math.round(item.contribution_amount).toLocaleString()} / {item.contribution_frequency} · Rebalance {item.rebalance_frequency}
+                    Start ${Number(benchmarkStartValue.replace(/,/g, "")) || 10000} · Contrib ${Number(benchmarkContributionAmount.replace(/,/g, "")) || 0} / {benchmarkContributionFrequency} · Rebalance {benchmarkRebalanceFrequency}
                   </div>
                 </div>
-              );
-            })}
-            {Array.from({ length: emptySlots }).map((_, index) => (
-              <div key={`empty-${index}`} className="rounded-lg border border-dashed border-border bg-white/70 p-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex h-3.5 w-3.5 rounded-full border border-border bg-slate-200" />
-                      <p className="text-[11px] font-semibold text-muted-foreground">Empty slot</p>
-                    </div>
-                    <p className="mt-1 text-[10px] text-muted-foreground">Create a new portfolio to use this slot.</p>
-                  </div>
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
-                  <span>Start: —</span>
-                  <span>Contrib: —</span>
-                  <span>Freq: —</span>
-                  <span>Rebalance: —</span>
-                </div>
-              </div>
-            ))}
-            {!isLoggedIn && lockedSlots > 0 ? (
-              <div className="relative rounded-lg border border-dashed border-border bg-white/70 p-2">
-                <div className="rounded-lg border border-border bg-white p-2 blur-sm">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex h-3.5 w-3.5 rounded-full border border-border bg-slate-200" />
-                        <p className="text-sm font-semibold text-muted-foreground">Locked slot</p>
+                {visibleItems.map((item) => {
+                  const active = activeIds.has(item.id);
+                  const dirty = dirtyById[item.id];
+                  const loading = loadingIds.has(item.id);
+                  const sortedHoldings = [...item.holdings].sort((a, b) => b.weight - a.weight);
+                  const holdingLabel = sortedHoldings.length
+                    ? sortedHoldings.map((h) => `${h.symbol.toUpperCase()} ${h.weight.toFixed(1)}%`).join(" · ")
+                    : "No holdings yet";
+                  return (
+                    <div
+                      key={item.id}
+                      className={`rounded-lg border p-2 transition ${
+                        active ? "border-emerald-500 bg-emerald-50" : "border-border bg-slate-50 text-slate-500"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <div className="relative">
+                              <button
+                                className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-border"
+                                style={{ backgroundColor: item.color ?? PORTFOLIO_COLORS[0] }}
+                                onClick={() => setConfirmDeleteId((prev) => (prev === `color-${item.id}` ? null : `color-${item.id}`))}
+                                aria-label="Choose color"
+                              />
+                              {confirmDeleteId === `color-${item.id}` ? (
+                                <div className="absolute left-0 top-6 z-20 flex w-36 flex-wrap gap-1 rounded-lg border border-border bg-white p-2 shadow-soft">
+                                  {PORTFOLIO_COLORS.map((color) => (
+                                    <button
+                                      key={`${item.id}-${color}`}
+                                      type="button"
+                                      aria-label="Select color"
+                                      className={`h-5 w-5 rounded-full border ${item.color === color ? "border-slate-900" : "border-border"}`}
+                                      style={{ backgroundColor: color }}
+                                      onClick={() => {
+                                        setItems((prev) => prev.map((p) => (p.id === item.id ? { ...p, color } : p)));
+                                        const stored = window.localStorage.getItem("investest:portfolioColors");
+                                        let map: Record<string, string> = {};
+                                        try {
+                                          map = stored ? JSON.parse(stored) : {};
+                                        } catch {
+                                          map = {};
+                                        }
+                                        map[item.id] = color;
+                                        window.localStorage.setItem("investest:portfolioColors", JSON.stringify(map));
+                                        setConfirmDeleteId(null);
+                                      }}
+                                    />
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                            <p className="text-[11px] font-semibold truncate">{item.name}</p>
+                          </div>
+                          <HoldingsPopover label={holdingLabel} hasHoldings={sortedHoldings.length > 0} />
+                          {!isLoggedIn && item.isGuest ? (
+                            <p className="mt-1 text-[10px] text-muted-foreground">Tip: Click the pencil to edit holdings.</p>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {dirty ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">Edited</span> : null}
+                          {loading ? <span className="text-[10px] text-muted-foreground">Updating...</span> : null}
+                          <button
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
+                            onClick={() => toggleActive(item.id)}
+                            aria-label={active ? "Hide portfolio" : "Show portfolio"}
+                          >
+                            {active ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                          </button>
+                          <button
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
+                            onClick={() => openEditor(item)}
+                            aria-label="Edit portfolio"
+                          >
+                            <Edit3 className="h-3.5 w-3.5" />
+                          </button>
+                          {!item.isGuest ? (
+                            <div className="relative">
+                              <button
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
+                                onClick={() => setConfirmDeleteId((prev) => (prev === item.id ? null : item.id))}
+                                aria-label="Delete portfolio"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                              {confirmDeleteId === item.id ? (
+                                <div className="absolute right-0 top-10 z-20 w-40 rounded-lg border border-border bg-white p-2 text-xs shadow-soft">
+                                  <p className="text-[11px] text-muted-foreground">Delete this portfolio?</p>
+                                  <div className="mt-2 flex items-center justify-end gap-2">
+                                    <button
+                                      className="text-[11px] text-muted-foreground"
+                                      onClick={() => setConfirmDeleteId(null)}
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      className="rounded bg-red-600 px-2 py-1 text-[11px] font-semibold text-white"
+                                      onClick={() => {
+                                        setConfirmDeleteId(null);
+                                        handleDelete(item);
+                                      }}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
-                      <p className="mt-1 text-[11px] text-muted-foreground">Sign in to unlock more portfolios.</p>
+                      <div className="mt-1 text-[10px] text-muted-foreground truncate">
+                        Start ${Math.round(item.start_value).toLocaleString()} · Contrib ${Math.round(item.contribution_amount).toLocaleString()} / {item.contribution_frequency} · Rebalance {item.rebalance_frequency}
+                      </div>
+                    </div>
+                  );
+                })}
+                {Array.from({ length: emptySlots }).map((_, index) => (
+                  <div key={`empty-${index}`} className="rounded-lg border border-dashed border-border bg-white/70 p-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex h-3.5 w-3.5 rounded-full border border-border bg-slate-200" />
+                          <p className="text-[11px] font-semibold text-muted-foreground">Empty slot</p>
+                        </div>
+                        <p className="mt-1 text-[10px] text-muted-foreground">Create a new portfolio to use this slot.</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
+                      <span>Start: —</span>
+                      <span>Contrib: —</span>
+                      <span>Freq: —</span>
+                      <span>Rebalance: —</span>
                     </div>
                   </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-                    <span>Start: —</span>
-                    <span>Contrib: —</span>
-                    <span>Freq: —</span>
-                    <span>Rebalance: —</span>
+                ))}
+                {!isLoggedIn && lockedSlots > 0 ? (
+                  <div className="relative rounded-lg border border-dashed border-border bg-white/70 p-2">
+                    <div className="rounded-lg border border-border bg-white p-2 blur-sm">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex h-3.5 w-3.5 rounded-full border border-border bg-slate-200" />
+                            <p className="text-sm font-semibold text-muted-foreground">Locked slot</p>
+                          </div>
+                          <p className="mt-1 text-[11px] text-muted-foreground">Sign in to unlock more portfolios.</p>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+                        <span>Start: —</span>
+                        <span>Contrib: —</span>
+                        <span>Freq: —</span>
+                        <span>Rebalance: —</span>
+                      </div>
+                    </div>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="flex flex-col items-center gap-2 text-center">
+                        <Button size="sm" onClick={handleSignIn}>
+                          Log in
+                        </Button>
+                        <p className="text-[11px] text-muted-foreground">
+                          to unlock more portfolios and save them
+                        </p>
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="flex flex-col items-center gap-2 text-center">
-                    <Button size="sm" onClick={handleSignIn}>
-                      Log in
-                    </Button>
-                    <p className="text-[11px] text-muted-foreground">
-                      to unlock more portfolios and save them
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ) : null}
+                ) : null}
+              </>
+            )}
           </div>
         </Card>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-        <MetricCard
-          label="Annualized Return"
-          info="Average yearly growth rate implied by historical performance over the selected period."
-          rows={buildRanking(
-            (data) => data.metrics.annualizedReturn,
-            (value) => `${(value * 100).toFixed(2)}%`,
-            true,
-            benchmarkMetrics?.annualizedReturn ?? null
-          )}
-        />
-        <MetricCard
-          label="Annualized Volatility"
-          info="How much returns fluctuate year to year. Higher means a bumpier ride."
-          rows={buildRanking(
-            (data) => data.metrics.annualizedVolatility,
-            (value) => `${(value * 100).toFixed(2)}%`,
-            false,
-            benchmarkMetrics?.annualizedVolatility ?? null
-          )}
-        />
-        <MetricCard
-          label="Max Drawdown"
-          info="Largest historical drop from a previous peak. Shows worst observed decline."
-          rows={buildRanking(
-            (data) => data.metrics.maxDrawdown,
-            (value) => `${(value * 100).toFixed(2)}%`,
-            false,
-            benchmarkMetrics?.maxDrawdown ?? null
-          )}
-        />
-        <MetricCard
-          label="Risk Score"
-          info="A 1-10 score based on volatility and drawdown. Lower is steadier, higher is riskier."
-          rows={buildRanking(
-            (data) => data.riskScore,
-            (value) => `${value.toFixed(1)}/10`,
-            false,
-            benchmarkRisk ?? null
-          )}
-        />
+        {showInitialLoading ? (
+          Array.from({ length: 4 }).map((_, index) => (
+            <Card key={`metric-skeleton-${index}`} className="h-[120px] animate-pulse border border-border bg-white/80" />
+          ))
+        ) : (
+          <>
+            <MetricCard
+              label="Annualized Return"
+              info="Average yearly growth rate implied by historical performance over the selected period."
+              rows={buildRanking(
+                (data) => data.metrics.annualizedReturn,
+                (value) => `${(value * 100).toFixed(2)}%`,
+                true,
+                benchmarkMetrics?.annualizedReturn ?? null
+              )}
+            />
+            <MetricCard
+              label="Annualized Volatility"
+              info="How much returns fluctuate year to year. Higher means a bumpier ride."
+              rows={buildRanking(
+                (data) => data.metrics.annualizedVolatility,
+                (value) => `${(value * 100).toFixed(2)}%`,
+                false,
+                benchmarkMetrics?.annualizedVolatility ?? null
+              )}
+            />
+            <MetricCard
+              label="Max Drawdown"
+              info="Largest historical drop from a previous peak. Shows worst observed decline."
+              rows={buildRanking(
+                (data) => data.metrics.maxDrawdown,
+                (value) => `${(value * 100).toFixed(2)}%`,
+                false,
+                benchmarkMetrics?.maxDrawdown ?? null
+              )}
+            />
+            <MetricCard
+              label="Risk Score"
+              info="A 1-10 score based on volatility and drawdown. Lower is steadier, higher is riskier."
+              rows={buildRanking(
+                (data) => data.riskScore,
+                (value) => `${value.toFixed(1)}/10`,
+                false,
+                benchmarkRisk ?? null
+              )}
+            />
+          </>
+        )}
       </div>
 
 
