@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -8,6 +8,7 @@ import { signInWithGoogleIdToken } from "@/lib/auth/google";
 
 export function AuthNavButton() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const previousAuthedRef = useRef<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -20,6 +21,7 @@ export function AuthNavButton() {
       } = await supabase.auth.getUser();
       if (mounted) {
         setEmail(user?.email ?? null);
+        previousAuthedRef.current = Boolean(user);
         setLoading(false);
       }
     };
@@ -31,6 +33,15 @@ export function AuthNavButton() {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setEmail(session?.user?.email ?? null);
       setLoading(false);
+      const nextAuthed = Boolean(session?.user);
+      if (previousAuthedRef.current === null) {
+        previousAuthedRef.current = nextAuthed;
+        return;
+      }
+      if (previousAuthedRef.current !== nextAuthed) {
+        previousAuthedRef.current = nextAuthed;
+        window.location.reload();
+      }
     });
 
     return () => {

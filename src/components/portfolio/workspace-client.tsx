@@ -2,6 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, Edit3, Eye, EyeOff, Info, Plus, Trash2, X } from "lucide-react";
 import { BuildPortfolioClient, prefetchSearchCache } from "@/components/portfolio/build-portfolio-client";
 import { PerformanceChartMulti, type SeriesEntry } from "@/components/portfolio/performance-chart-multi";
@@ -201,8 +202,8 @@ function loadGuestPortfolio(): PortfolioItem | null {
 
 export function WorkspaceClient({ initialItems, userId }: Props) {
   const supabase = createSupabaseBrowserClient();
+  const router = useRouter();
   const isLoggedIn = Boolean(userId);
-  const authReloadedRef = useRef(false);
   const [items, setItems] = useState<PortfolioItem[]>(initialItems);
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set(initialItems.map((item) => item.id)));
   const [analysisById, setAnalysisById] = useState<Record<string, AnalyzeResponse>>({});
@@ -234,7 +235,8 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
 
   const handleSignIn = useCallback(async () => {
     await signInWithGoogleIdToken();
-  }, []);
+    router.refresh();
+  }, [router]);
 
   const applyColors = (itemsToColor: PortfolioItem[]) => {
     if (typeof window === "undefined") return itemsToColor;
@@ -277,21 +279,6 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     const used = new Set(Object.values(map));
     return PORTFOLIO_COLORS.find((c) => !used.has(c)) ?? PORTFOLIO_COLORS[0];
   };
-
-  useEffect(() => {
-    const {
-      data: { subscription }
-    } = supabase.auth.onAuthStateChange((event) => {
-      if (authReloadedRef.current) return;
-      if (event === "SIGNED_IN" || event === "SIGNED_OUT") {
-        authReloadedRef.current = true;
-        window.location.reload();
-      }
-    });
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [supabase]);
 
   useEffect(() => {
     if (isLoggedIn) return;
@@ -482,23 +469,115 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     window.localStorage.setItem(`investest:${key}`, JSON.stringify({ ts: Date.now(), payload }));
   }, [buildAnalysisCacheKey]);
 
+  const buildBenchmarkCacheKey = useCallback((ctx?: {
+    symbol: (typeof BENCHMARKS)[number];
+    startValue: string;
+    contributionAmount: string;
+    contributionFrequency: "weekly" | "monthly" | "yearly";
+    rebalanceFrequency: RebalanceFrequencyOption;
+  }) => {
+    const benchmarkCtx = ctx ?? {
+      symbol: benchmarkSymbol,
+      startValue: benchmarkStartValue,
+      contributionAmount: benchmarkContributionAmount,
+      contributionFrequency: benchmarkContributionFrequency,
+      rebalanceFrequency: benchmarkRebalanceFrequency
+    };
+    return [
+      "benchmark",
+      benchmarkCtx.symbol,
+      timeRange,
+      benchmarkCtx.startValue,
+      benchmarkCtx.contributionAmount,
+      benchmarkCtx.contributionFrequency,
+      benchmarkCtx.rebalanceFrequency
+    ].join("|");
+  }, [
+    benchmarkContributionAmount,
+    benchmarkContributionFrequency,
+    benchmarkRebalanceFrequency,
+    benchmarkStartValue,
+    benchmarkSymbol,
+    timeRange
+  ]);
+
+  const getCachedBenchmark = useCallback((ctx?: {
+    symbol: (typeof BENCHMARKS)[number];
+    startValue: string;
+    contributionAmount: string;
+    contributionFrequency: "weekly" | "monthly" | "yearly";
+    rebalanceFrequency: RebalanceFrequencyOption;
+  }) => {
+    if (typeof window === "undefined") return null;
+    const key = buildBenchmarkCacheKey(ctx);
+    const raw = window.localStorage.getItem(`investest:${key}`);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as { ts: number; payload: BenchmarkResponse };
+      if (!parsed?.payload) return null;
+      const ageMs = Date.now() - parsed.ts;
+      if (ageMs > 1000 * 60 * 60 * 12) return null;
+      return parsed.payload;
+    } catch {
+      return null;
+    }
+  }, [buildBenchmarkCacheKey]);
+
+  const setCachedBenchmark = useCallback((payload: BenchmarkResponse, ctx?: {
+    symbol: (typeof BENCHMARKS)[number];
+    startValue: string;
+    contributionAmount: string;
+    contributionFrequency: "weekly" | "monthly" | "yearly";
+    rebalanceFrequency: RebalanceFrequencyOption;
+  }) => {
+    if (typeof window === "undefined") return;
+    const key = buildBenchmarkCacheKey(ctx);
+    window.localStorage.setItem(`investest:${key}`, JSON.stringify({ ts: Date.now(), payload }));
+  }, [buildBenchmarkCacheKey]);
+
   const runAnalysisFor = useCallback(async (toRun: PortfolioItem[]) => {
     if (!toRun.length) return;
 
     window.localStorage.setItem("investest:timeRange", timeRange);
 
-    await Promise.all(
-      toRun.map(async (item) => {
-        if (loadingIdsRef.current.has(item.id)) return;
-        const cached = getCachedAnalysis(item);
-        if (cached) {
-          setAnalysisById((prev) => ({ ...prev, [item.id]: cached }));
-          setAnalysisMetaById((prev) => ({ ...prev, [item.id]: { timeRange } }));
-          setDirtyById((prev) => ({ ...prev, [item.id]: false }));
-          return;
+    const nextAnalysis: Record<string, AnalyzeResponse> = {};
+    const nextMeta: Record<string, { timeRange: TimeRange }> = {};
+    const resolvedIds: string[] = [];
+    const pendingFetches: PortfolioItem[] = [];
+
+    for (const item of toRun) {
+      if (loadingIdsRef.current.has(item.id)) continue;
+      const cached = getCachedAnalysis(item);
+      if (cached) {
+        nextAnalysis[item.id] = cached;
+        nextMeta[item.id] = { timeRange };
+        resolvedIds.push(item.id);
+      } else {
+        pendingFetches.push(item);
+      }
+    }
+
+    if (resolvedIds.length) {
+      setAnalysisById((prev) => ({ ...prev, ...nextAnalysis }));
+      setAnalysisMetaById((prev) => ({ ...prev, ...nextMeta }));
+      setDirtyById((prev) => {
+        const next = { ...prev };
+        for (const id of resolvedIds) {
+          next[id] = false;
         }
-        loadingIdsRef.current.add(item.id);
-        setLoadingIds(new Set(loadingIdsRef.current));
+        return next;
+      });
+    }
+
+    if (!pendingFetches.length) return;
+
+    for (const item of pendingFetches) {
+      loadingIdsRef.current.add(item.id);
+    }
+    setLoadingIds(new Set(loadingIdsRef.current));
+
+    const fetched = await Promise.all(
+      pendingFetches.map(async (item) => {
         try {
           const response = await fetch("/api/analyze", {
             method: "POST",
@@ -517,18 +596,37 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
             throw new Error(err.error ?? "Analyze request failed");
           }
           const payload = (await response.json()) as AnalyzeResponse;
-          setAnalysisById((prev) => ({ ...prev, [item.id]: payload }));
-          setAnalysisMetaById((prev) => ({ ...prev, [item.id]: { timeRange } }));
-          setDirtyById((prev) => ({ ...prev, [item.id]: false }));
           setCachedAnalysis(item, payload);
+          return { item, payload };
         } catch (error) {
           console.error(error);
+          return null;
         } finally {
           loadingIdsRef.current.delete(item.id);
-          setLoadingIds(new Set(loadingIdsRef.current));
         }
       })
     );
+
+    const successfulFetches = fetched.filter((entry): entry is { item: PortfolioItem; payload: AnalyzeResponse } => entry !== null);
+    if (successfulFetches.length) {
+      setAnalysisById((prev) => ({
+        ...prev,
+        ...Object.fromEntries(successfulFetches.map(({ item, payload }) => [item.id, payload]))
+      }));
+      setAnalysisMetaById((prev) => ({
+        ...prev,
+        ...Object.fromEntries(successfulFetches.map(({ item }) => [item.id, { timeRange }]))
+      }));
+      setDirtyById((prev) => {
+        const next = { ...prev };
+        for (const { item } of successfulFetches) {
+          next[item.id] = false;
+        }
+        return next;
+      });
+    }
+
+    setLoadingIds(new Set(loadingIdsRef.current));
   }, [
     getCachedAnalysis,
     setCachedAnalysis,
@@ -580,6 +678,14 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       contributionFrequency: benchmarkContributionFrequency,
       rebalanceFrequency: benchmarkRebalanceFrequency
     };
+    const cached = getCachedBenchmark(ctx);
+    if (cached) {
+      setBenchmarkData(cached);
+      setBenchmarkAttempted(true);
+      setBenchmarkLoading(false);
+      return;
+    }
+
     try {
       const response = await fetch("/api/benchmark", {
         method: "POST",
@@ -599,6 +705,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       }
       const payload = (await response.json()) as BenchmarkResponse;
       setBenchmarkData(payload);
+      setCachedBenchmark(payload, ctx);
     } catch (error) {
       console.error(error);
     } finally {
@@ -611,6 +718,8 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     benchmarkRebalanceFrequency,
     benchmarkStartValue,
     benchmarkSymbol,
+    getCachedBenchmark,
+    setCachedBenchmark,
     timeRange
   ]);
 
