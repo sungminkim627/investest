@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, Edit3, Eye, EyeOff, Info, Plus, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, Edit3, Eye, EyeOff, Info, Plus, Trash2, X } from "lucide-react";
 import { BuildPortfolioClient, prefetchSearchCache } from "@/components/portfolio/build-portfolio-client";
 import { PerformanceChartMulti, type SeriesEntry } from "@/components/portfolio/performance-chart-multi";
 import { Button } from "@/components/ui/button";
@@ -12,12 +12,28 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AnalyzeResponse, BenchmarkResponse, HoldingInput, TimeRange } from "@/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { signInWithGoogleIdToken } from "@/lib/auth/google";
+import { PORTFOLIO_TEMPLATES, type PortfolioTemplate, type PortfolioTemplateTheme } from "@/lib/portfolio/templates";
 import { ResponsiveContainer as RechartsResponsiveContainer } from "recharts";
 
 const BENCHMARKS = ["SPY", "QQQ", "VTI", "AGG"] as const;
 const RANGES: TimeRange[] = ["1Y", "3Y", "5Y", "10Y"];
 type RebalanceFrequencyOption = "none" | "monthly" | "quarterly" | "yearly";
+type NewPortfolioStep = "choice" | "templates" | "editor";
 const PORTFOLIO_COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#ef4444", "#7c3aed", "#0891b2", "#0ea5e9", "#14b8a6"];
+const TEMPLATE_THEMES: PortfolioTemplateTheme[] = [
+  "The Classics",
+  "High Growth & Innovation",
+  "Income & Dividends",
+  "Defensive & Conservative",
+  "Thematic & Specialty"
+];
+const TEMPLATE_THEME_LABELS: Record<PortfolioTemplateTheme, string> = {
+  "The Classics": "🏛️ The Classics",
+  "High Growth & Innovation": "🚀 High Growth & Innovation",
+  "Income & Dividends": "💰 Income & Dividends",
+  "Defensive & Conservative": "🛡️ Defensive & Conservative",
+  "Thematic & Specialty": "🌍 Thematic & Specialty"
+};
 
 function HoldingsPopover({ label, hasHoldings }: { label: string; hasHoldings: boolean }) {
   const [open, setOpen] = useState(false);
@@ -160,13 +176,13 @@ interface Props {
   userId?: string | null;
 }
 
-function loadGuestPortfolio(): PortfolioItem {
+function loadGuestPortfolio(): PortfolioItem | null {
   const holdingsRaw = localStorage.getItem("investest:holdings") ?? "[]";
   const holdings = (JSON.parse(holdingsRaw) as HoldingInput[]).map((h) => ({
     symbol: h.symbol.toUpperCase(),
     weight: h.weight
   }));
-  const resolvedHoldings = holdings.length ? holdings : [{ symbol: "SPY", weight: 100 }];
+  if (!holdings.length) return null;
   const startValue = Number(localStorage.getItem("investest:startValue") ?? 10000) || 10000;
   const contributionAmount = Number(localStorage.getItem("investest:contributionAmount") ?? 0) || 0;
   const contributionFrequency = (localStorage.getItem("investest:contributionFrequency") as "weekly" | "monthly" | "yearly") ?? "monthly";
@@ -174,7 +190,7 @@ function loadGuestPortfolio(): PortfolioItem {
   return {
     id: "guest",
     name: "My Portfolio",
-    holdings: resolvedHoldings,
+    holdings,
     start_value: startValue,
     contribution_amount: contributionAmount,
     contribution_frequency: contributionFrequency,
@@ -210,6 +226,9 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
   const [draftBenchmarkRebalanceFrequency, setDraftBenchmarkRebalanceFrequency] = useState<RebalanceFrequencyOption>("none");
   const [timeRange, setTimeRange] = useState<TimeRange>("5Y");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [newPortfolioStep, setNewPortfolioStep] = useState<NewPortfolioStep | null>(null);
+  const [newPortfolioDraft, setNewPortfolioDraft] = useState<PortfolioItem | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editingBenchmark, setEditingBenchmark] = useState(false);
 
@@ -246,6 +265,19 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     return updated;
   };
 
+  const getNextPortfolioColor = () => {
+    if (typeof window === "undefined") return PORTFOLIO_COLORS[0];
+    const stored = window.localStorage.getItem("investest:portfolioColors");
+    let map: Record<string, string> = {};
+    try {
+      map = stored ? JSON.parse(stored) : {};
+    } catch {
+      map = {};
+    }
+    const used = new Set(Object.values(map));
+    return PORTFOLIO_COLORS.find((c) => !used.has(c)) ?? PORTFOLIO_COLORS[0];
+  };
+
   useEffect(() => {
     const {
       data: { subscription }
@@ -264,9 +296,14 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
   useEffect(() => {
     if (isLoggedIn) return;
     const guest = loadGuestPortfolio();
-    const colored = applyColors([guest]);
-    setItems(colored);
-    setActiveIds(new Set([guest.id]));
+    if (guest) {
+      const colored = applyColors([guest]);
+      setItems(colored);
+      setActiveIds(new Set([guest.id]));
+    } else {
+      setItems([]);
+      setActiveIds(new Set());
+    }
   }, [isLoggedIn]);
 
   useEffect(() => {
@@ -360,15 +397,35 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     setEditingId(null);
   };
 
+  const closeNewPortfolioWizard = () => {
+    setNewPortfolioStep(null);
+    setNewPortfolioDraft(null);
+    setSelectedTemplateId(null);
+  };
+
+  const openNewPortfolioEditor = (draft?: Partial<PortfolioItem>) => {
+    setNewPortfolioDraft({
+      id: `draft-${Date.now()}`,
+      name: draft?.name ?? "Untitled",
+      holdings: draft?.holdings ?? [],
+      start_value: draft?.start_value ?? 10000,
+      contribution_amount: draft?.contribution_amount ?? 0,
+      contribution_frequency: draft?.contribution_frequency ?? "monthly",
+      rebalance_frequency: draft?.rebalance_frequency ?? "none",
+      isNew: true,
+      isGuest: draft?.isGuest ?? !isLoggedIn,
+      color: draft?.color ?? getNextPortfolioColor()
+    });
+    setNewPortfolioStep("editor");
+  };
+
   const addNewPortfolio = () => {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn && visibleItems.length >= 1) return;
     if (visibleItems.length >= maxSlots) return;
-    const stored = window.localStorage.getItem("investest:portfolioColors");
-    const map: Record<string, string> = stored ? JSON.parse(stored) : {};
-    const used = new Set(Object.values(map));
-    const nextColor = PORTFOLIO_COLORS.find((c) => !used.has(c)) ?? PORTFOLIO_COLORS[0];
-    const newItem: PortfolioItem = {
-      id: `new-${Date.now()}`,
+    setSelectedTemplateId(null);
+    setNewPortfolioStep("choice");
+    setNewPortfolioDraft({
+      id: `draft-${Date.now()}`,
       name: "Untitled",
       holdings: [],
       start_value: 10000,
@@ -376,12 +433,9 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       contribution_frequency: "monthly",
       rebalance_frequency: "none",
       isNew: true,
-      color: nextColor
-    };
-    setItems((prev) => [newItem, ...prev]);
-    setActiveIds((prev) => new Set(prev).add(newItem.id));
-    setDirtyById((prev) => ({ ...prev, [newItem.id]: true }));
-    openEditor(newItem);
+      isGuest: !isLoggedIn,
+      color: getNextPortfolioColor()
+    });
   };
 
   const [analysisMetaById, setAnalysisMetaById] = useState<Record<string, { timeRange: TimeRange }>>({});
@@ -579,6 +633,87 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
     void prefetchSearchCache();
   }, [isHydrated]);
 
+  const createPortfolioFromPayload = async (payload: {
+    name: string;
+    holdings: HoldingInput[];
+    startValue: number;
+    contributionAmount: number;
+    contributionFrequency: "weekly" | "monthly" | "yearly";
+    rebalanceFrequency: RebalanceFrequencyOption;
+  }, color?: string) => {
+    const createdDraft: PortfolioItem = {
+      id: `draft-${Date.now()}`,
+      name: payload.name.trim() || "Untitled",
+      holdings: payload.holdings,
+      start_value: payload.startValue,
+      contribution_amount: payload.contributionAmount,
+      contribution_frequency: payload.contributionFrequency,
+      rebalance_frequency: payload.rebalanceFrequency,
+      isNew: true,
+      isGuest: !isLoggedIn,
+      color: color ?? getNextPortfolioColor()
+    };
+
+    if (!isLoggedIn) {
+      const guestItem: PortfolioItem = {
+        ...createdDraft,
+        id: "guest",
+        name: selectedTemplateId ? createdDraft.name : "My Portfolio",
+        isNew: false,
+        isGuest: true
+      };
+      localStorage.setItem("investest:holdings", JSON.stringify(guestItem.holdings));
+      localStorage.setItem("investest:startValue", String(guestItem.start_value));
+      localStorage.setItem("investest:contributionAmount", String(guestItem.contribution_amount));
+      localStorage.setItem("investest:contributionFrequency", guestItem.contribution_frequency);
+      localStorage.setItem("investest:rebalanceFrequency", guestItem.rebalance_frequency);
+      setItems(applyColors([guestItem]));
+      setActiveIds(new Set([guestItem.id]));
+      setDirtyById({});
+      await runAnalysisFor([guestItem]);
+      window.dispatchEvent(new CustomEvent("investest:holdings-updated"));
+      return guestItem;
+    }
+
+    try {
+      const { data: created, error: createError } = await supabase
+        .from("portfolios")
+        .insert([{
+          user_id: userId,
+          name: createdDraft.name,
+          start_value: createdDraft.start_value,
+          contribution_amount: createdDraft.contribution_amount,
+          contribution_frequency: createdDraft.contribution_frequency,
+          rebalance_frequency: createdDraft.rebalance_frequency
+        }])
+        .select("id")
+        .single();
+
+      if (createError || !created) throw createError ?? new Error("Failed to create portfolio");
+
+      if (createdDraft.holdings.length) {
+        const { error: holdingsError } = await supabase.from("portfolio_holdings").insert(
+          createdDraft.holdings.map((h) => ({
+            portfolio_id: created.id,
+            symbol: h.symbol.toUpperCase(),
+            weight: h.weight
+          }))
+        );
+        if (holdingsError) throw holdingsError;
+      }
+
+      const createdItem: PortfolioItem = { ...createdDraft, id: created.id, isNew: false };
+      setItems((prev) => [createdItem, ...prev]);
+      setActiveIds((prev) => new Set(prev).add(created.id));
+      setDirtyById((prev) => ({ ...prev, [created.id]: false }));
+      await runAnalysisFor([createdItem]);
+      return createdItem;
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
+  };
+
 
   const handleCommit = async (payload: {
     name: string;
@@ -612,60 +747,6 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       localStorage.setItem("investest:rebalanceFrequency", updated.rebalance_frequency);
       window.dispatchEvent(new CustomEvent("investest:holdings-updated"));
       await runAnalysisFor([updated]);
-      closeEditor();
-      return;
-    }
-
-    if (updated.isNew) {
-      try {
-        const { data: created, error: createError } = await supabase
-          .from("portfolios")
-          .insert([{
-            user_id: userId,
-            name: updated.name,
-            start_value: updated.start_value,
-            contribution_amount: updated.contribution_amount,
-            contribution_frequency: updated.contribution_frequency,
-            rebalance_frequency: updated.rebalance_frequency
-          }])
-          .select("id")
-          .single();
-
-        if (createError || !created) throw createError ?? new Error("Failed to create portfolio");
-
-        if (updated.holdings.length) {
-          const { error: holdingsError } = await supabase.from("portfolio_holdings").insert(
-            updated.holdings.map((h) => ({
-              portfolio_id: created.id,
-              symbol: h.symbol.toUpperCase(),
-              weight: h.weight
-            }))
-          );
-          if (holdingsError) throw holdingsError;
-        }
-
-        const updatedWithId = { ...updated, id: created.id, isNew: false };
-        setItems((prev) =>
-          prev.map((item) =>
-            item.id === editingId ? updatedWithId : item
-          )
-        );
-        setActiveIds((prev) => {
-          const next = new Set(prev);
-          next.delete(editingId);
-          next.add(created.id);
-          return next;
-        });
-        setDirtyById((prev) => {
-          const next = { ...prev };
-          delete next[editingId];
-          next[created.id] = false;
-          return next;
-        });
-        await runAnalysisFor([updatedWithId]);
-      } catch (error) {
-        console.error(error);
-      }
       closeEditor();
       return;
     }
@@ -724,10 +805,8 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
       localStorage.setItem("investest:contributionAmount", "0");
       localStorage.setItem("investest:contributionFrequency", "monthly");
       localStorage.setItem("investest:rebalanceFrequency", "none");
-      const cleared = loadGuestPortfolio();
-      const colored = applyColors([cleared]);
-      setItems(colored);
-      setActiveIds(new Set([cleared.id]));
+      setItems([]);
+      setActiveIds(new Set());
       setAnalysisById({});
       setDirtyById({});
       window.dispatchEvent(new CustomEvent("investest:holdings-updated"));
@@ -779,6 +858,14 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
   const benchmarkProjection = benchmarkVisible ? benchmarkData?.benchmarkProjection ?? [] : [];
   const benchmarkMetrics = benchmarkVisible ? benchmarkData?.metrics ?? null : null;
   const benchmarkRisk = benchmarkVisible ? benchmarkData?.riskScore ?? null : null;
+  const templatesByTheme = useMemo(
+    () =>
+      TEMPLATE_THEMES.map((theme) => ({
+        theme,
+        templates: PORTFOLIO_TEMPLATES.filter((template) => template.theme === theme).sort((a, b) => a.risk - b.risk)
+      })),
+    []
+  );
 
   const buildRanking = (
     selector: (data: AnalyzeResponse) => number | null | undefined,
@@ -854,7 +941,7 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
                 size="sm"
                 variant="secondary"
                 onClick={addNewPortfolio}
-                disabled={!isLoggedIn || visibleItems.length >= maxSlots}
+                disabled={(!isLoggedIn && visibleItems.length >= 1) || visibleItems.length >= maxSlots}
                 className="h-8 px-3 text-xs"
               >
                 <Plus className="h-3.5 w-3.5" /> New
@@ -905,6 +992,19 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
                     Start ${Number(benchmarkStartValue.replace(/,/g, "")) || 10000} · Contrib ${Number(benchmarkContributionAmount.replace(/,/g, "")) || 0} / {benchmarkContributionFrequency} · Rebalance {benchmarkRebalanceFrequency}
                   </div>
                 </div>
+                {!isLoggedIn && visibleItems.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-emerald-300 bg-emerald-50/50 p-3 text-center">
+                    <p className="text-sm font-semibold text-slate-900">Create your first portfolio</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Start with your own mix or choose a template, then compare it against the benchmark.
+                    </p>
+                    <div className="mt-3 flex items-center justify-center">
+                      <Button size="sm" onClick={addNewPortfolio} className="gap-2">
+                        <Plus className="h-3.5 w-3.5" /> New portfolio
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
                 {visibleItems.map((item) => {
                   const active = activeIds.has(item.id);
                   const dirty = dirtyById[item.id];
@@ -981,39 +1081,37 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                           </button>
-                          {!item.isGuest ? (
-                            <div className="relative">
-                              <button
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
-                                onClick={() => setConfirmDeleteId((prev) => (prev === item.id ? null : item.id))}
-                                aria-label="Delete portfolio"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                              {confirmDeleteId === item.id ? (
-                                <div className="absolute right-0 top-10 z-20 w-40 rounded-lg border border-border bg-white p-2 text-xs shadow-soft">
-                                  <p className="text-[11px] text-muted-foreground">Delete this portfolio?</p>
-                                  <div className="mt-2 flex items-center justify-end gap-2">
-                                    <button
-                                      className="text-[11px] text-muted-foreground"
-                                      onClick={() => setConfirmDeleteId(null)}
-                                    >
-                                      Cancel
-                                    </button>
-                                    <button
-                                      className="rounded bg-red-600 px-2 py-1 text-[11px] font-semibold text-white"
-                                      onClick={() => {
-                                        setConfirmDeleteId(null);
-                                        handleDelete(item);
-                                      }}
-                                    >
-                                      Delete
-                                    </button>
-                                  </div>
+                          <div className="relative">
+                            <button
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-slate-600"
+                              onClick={() => setConfirmDeleteId((prev) => (prev === item.id ? null : item.id))}
+                              aria-label="Delete portfolio"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                            {confirmDeleteId === item.id ? (
+                              <div className="absolute right-0 top-10 z-20 w-40 rounded-lg border border-border bg-white p-2 text-xs shadow-soft">
+                                <p className="text-[11px] text-muted-foreground">Delete this portfolio?</p>
+                                <div className="mt-2 flex items-center justify-end gap-2">
+                                  <button
+                                    className="text-[11px] text-muted-foreground"
+                                    onClick={() => setConfirmDeleteId(null)}
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    className="rounded bg-red-600 px-2 py-1 text-[11px] font-semibold text-white"
+                                    onClick={() => {
+                                      setConfirmDeleteId(null);
+                                      handleDelete(item);
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
                                 </div>
-                              ) : null}
-                            </div>
-                          ) : null}
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                       <div className="mt-1 text-[10px] text-muted-foreground truncate">
@@ -1145,9 +1243,59 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
                   />
                 </div>
               </div>,
-              document.body
-            );
-          })()
+            document.body
+          );
+        })()
+        : null}
+      {newPortfolioStep && newPortfolioDraft
+        ? createPortal(
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 p-6">
+              <div className="flex w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border bg-white p-6 shadow-xl" style={{ maxHeight: "90vh" }}>
+                {newPortfolioStep === "choice" ? (
+                  <NewPortfolioChoiceStep
+                    onBuildMyOwn={() => {
+                      setSelectedTemplateId(null);
+                      openNewPortfolioEditor();
+                    }}
+                    onStartFromTemplate={() => setNewPortfolioStep("templates")}
+                    onClose={closeNewPortfolioWizard}
+                  />
+                ) : null}
+                {newPortfolioStep === "templates" ? (
+                  <NewPortfolioTemplateStep
+                    groupedTemplates={templatesByTheme}
+                    selectedTemplateId={selectedTemplateId}
+                    onBack={() => setNewPortfolioStep("choice")}
+                    onClose={closeNewPortfolioWizard}
+                    onSelectTemplate={(template) => {
+                      setSelectedTemplateId(template.id);
+                      openNewPortfolioEditor({
+                        name: template.name,
+                        holdings: template.holdings
+                      });
+                    }}
+                  />
+                ) : null}
+                {newPortfolioStep === "editor" ? (
+                  <EditPortfolioModal
+                    item={newPortfolioDraft}
+                    title="New Portfolio"
+                    backButtonLabel={selectedTemplateId ? "Templates" : "Options"}
+                    onBack={() => setNewPortfolioStep(selectedTemplateId ? "templates" : "choice")}
+                    onCommit={async (payload) => {
+                      const created = await createPortfolioFromPayload(payload, newPortfolioDraft.color);
+                      if (created) {
+                        closeNewPortfolioWizard();
+                      }
+                    }}
+                    commitButtonId="new-portfolio-save"
+                    onClose={closeNewPortfolioWizard}
+                  />
+                ) : null}
+              </div>
+            </div>,
+            document.body
+          )
         : null}
       {editingBenchmark
         ? createPortal(
@@ -1290,11 +1438,156 @@ export function WorkspaceClient({ initialItems, userId }: Props) {
   );
 }
 
+function riskLabel(risk: PortfolioTemplate["risk"]) {
+  return `${risk}/5`;
+}
+
+function holdingsSummary(holdings: HoldingInput[]) {
+  return holdings.map((holding) => `${holding.weight}% ${holding.symbol.toUpperCase()}`).join(", ");
+}
+
+function NewPortfolioChoiceStep({
+  onBuildMyOwn,
+  onStartFromTemplate,
+  onClose
+}: {
+  onBuildMyOwn: () => void;
+  onStartFromTemplate: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex h-full flex-col space-y-6">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-lg font-semibold">Create New Portfolio</p>
+          <p className="text-sm text-muted-foreground">Choose how you want to start.</p>
+        </div>
+        <button
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border text-slate-600"
+          onClick={onClose}
+          aria-label="Close"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="grid flex-1 gap-4 md:grid-cols-2">
+        <button
+          className="flex min-h-[320px] flex-col justify-between rounded-2xl border border-border bg-white p-6 text-left transition hover:border-emerald-400 hover:bg-emerald-50/40"
+          onClick={onBuildMyOwn}
+          type="button"
+        >
+          <div className="space-y-3">
+            <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+              Build My Own
+            </span>
+            <p className="text-2xl font-semibold tracking-tight">Start from scratch</p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              Pick your own instruments, set the weights, and shape the portfolio exactly how you want it.
+            </p>
+          </div>
+          <p className="text-sm font-medium text-emerald-700">Open the editor</p>
+        </button>
+        <button
+          className="flex min-h-[320px] flex-col justify-between rounded-2xl border border-border bg-white p-6 text-left transition hover:border-emerald-400 hover:bg-emerald-50/40"
+          onClick={onStartFromTemplate}
+          type="button"
+        >
+          <div className="space-y-3">
+            <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+              Start From a Template
+            </span>
+            <p className="text-2xl font-semibold tracking-tight">Use a proven starting point</p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              Choose from common portfolio styles, sorted by theme and risk, then fine-tune them in the editor.
+            </p>
+          </div>
+          <p className="text-sm font-medium text-emerald-700">Browse templates</p>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NewPortfolioTemplateStep({
+  groupedTemplates,
+  selectedTemplateId,
+  onBack,
+  onClose,
+  onSelectTemplate
+}: {
+  groupedTemplates: { theme: PortfolioTemplateTheme; templates: PortfolioTemplate[] }[];
+  selectedTemplateId: string | null;
+  onBack: () => void;
+  onClose: () => void;
+  onSelectTemplate: (template: PortfolioTemplate) => void;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Button size="sm" variant="secondary" className="gap-2" onClick={onBack}>
+            <ArrowLeft className="h-3.5 w-3.5" /> Back
+          </Button>
+          <div>
+            <p className="text-lg font-semibold">Start From a Template</p>
+            <p className="text-sm text-muted-foreground">Common allocations grouped by theme and sorted by risk.</p>
+          </div>
+        </div>
+        <button
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border text-slate-600"
+          onClick={onClose}
+          aria-label="Close"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
+        {groupedTemplates.map(({ theme, templates }) => (
+          <section key={theme} className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold">{TEMPLATE_THEME_LABELS[theme]}</p>
+              <p className="text-[11px] text-muted-foreground">{templates.length} templates</p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {templates.map((template) => (
+                <button
+                  key={template.id}
+                  type="button"
+                  className={`rounded-2xl border p-4 text-left transition ${
+                    selectedTemplateId === template.id
+                      ? "border-emerald-500 bg-emerald-50"
+                      : "border-border bg-white hover:border-emerald-300 hover:bg-emerald-50/30"
+                  }`}
+                  onClick={() => onSelectTemplate(template)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="text-base font-semibold">{template.name}</p>
+                      <p className="text-sm text-muted-foreground">{template.summary}</p>
+                    </div>
+                    <span className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
+                      Risk {riskLabel(template.risk)}
+                    </span>
+                  </div>
+                  <p className="mt-4 text-[11px] text-muted-foreground">{holdingsSummary(template.holdings)}</p>
+                </button>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const EditPortfolioModal = memo(function EditPortfolioModal({
   item,
   onCommit,
   commitButtonId,
-  onClose
+  onClose,
+  title = "Edit Portfolio",
+  backButtonLabel,
+  onBack
 }: {
   item: PortfolioItem;
   onCommit: (payload: {
@@ -1307,6 +1600,9 @@ const EditPortfolioModal = memo(function EditPortfolioModal({
   }) => void;
   commitButtonId: string;
   onClose: () => void;
+  title?: string;
+  backButtonLabel?: string;
+  onBack?: () => void;
 }) {
   const nameRef = useRef<HTMLInputElement | null>(null);
   const defaultName = item.name;
@@ -1330,7 +1626,12 @@ const EditPortfolioModal = memo(function EditPortfolioModal({
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <p className="text-lg font-semibold">Edit Portfolio</p>
+            {onBack ? (
+              <Button size="sm" variant="secondary" className="gap-2" onClick={onBack}>
+                <ArrowLeft className="h-3.5 w-3.5" /> {backButtonLabel ?? "Back"}
+              </Button>
+            ) : null}
+            <p className="text-lg font-semibold">{title}</p>
             <div className="group relative">
               <Input
                 ref={nameRef}
