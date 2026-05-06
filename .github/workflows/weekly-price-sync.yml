@@ -2,7 +2,7 @@ name: Weekly Price Sync
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "15 14 * * 2,3"
   workflow_dispatch:
 
 jobs:
