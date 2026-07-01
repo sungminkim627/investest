@@ -27,7 +27,7 @@ Tiingo was selected for V1 because it provides:
 - `src/lib/supabase` client/server/admin helpers
 - `supabase/migrations` schema + RLS migration SQL
 
-## Local Setup
+## Local Setup 
 
 1. Install dependencies:
    ```bash
